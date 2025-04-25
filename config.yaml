@@ -1,0 +1,49 @@
+# Configuration file for vision model fine-tuning
+
+# Model parameters
+model_name: "unsloth/Llama-3.2-11B-Vision-Instruct"
+load_in_4bit: true
+use_gradient_checkpointing: "unsloth"
+
+# Model fine-tuning settings
+finetune_vision_layers: false
+finetune_language_layers: true
+finetune_attention_modules: true
+finetune_mlp_modules: true
+
+# LoRA parameters
+lora_r: 16
+lora_alpha: 16
+lora_dropout: 0
+lora_bias: "none"
+use_rslora: false
+random_state: 3407
+
+# Training parameters
+batch_size: 2
+grad_accum: 4
+warmup_steps: 5
+epochs: 1
+lr: 0.0002
+weight_decay: 0.01
+logging_steps: 1
+optim: "adamw_8bit"
+scheduler: "linear"
+seed: 3407
+
+# Hardware options
+use_bf16: true
+
+# Dataset parameters
+dataset: "AQUA"
+external_knowledge: false
+num_proc: 4
+max_seq_length: 2048
+
+# Weights & Biases logging
+use_wandb: true
+wandb_project: "VizSage"
+wandb_tags: ["llama3", "vision", "finetune"]
+
+# Output settings
+output_dir: "outputs"
