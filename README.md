@@ -24,7 +24,7 @@ VizSage is a streamlined framework for fine-tuning vision-language models (VLMs)
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/vizsage.git
+   git clone https://github.com/bianccc01/vizsage.git
    cd vizsage
    ```
 
