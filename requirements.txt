@@ -4,6 +4,7 @@ accelerate
 xformers==0.0.29.post3
 peft
 trl==0.15.2
+torch
 triton
 cut_cross_entropy
 unsloth_zoo

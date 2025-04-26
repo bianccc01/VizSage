@@ -128,7 +128,7 @@ def train(model, tokenizer, converted_dataset, config, wandb_run=None):
 
             # Disable saving model weights to wandb
             hub_model_id=None,
-            hub_strategy=None,
+            hub_strategy="end",
             push_to_hub=False,
             save_strategy="epoch",  # Only save locally at end of epoch
 
