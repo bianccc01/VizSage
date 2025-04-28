@@ -12,30 +12,82 @@ def extract_image(image_name, base_path="data"):
     return image
 
 
-def get_dataset(base_path="data", dataset="AQUA", external_knowledge=False):
+def get_dataset(base_path="data", dataset="AQUA", external_knowledge=False, use_streaming=False):
     """
-    Get the dataset from the base path.
+    Get the dataset from the base path with optional streaming support.
+
+    Args:
+        base_path (str): Base path for dataset
+        dataset (str): Dataset name
+        external_knowledge (bool): Whether to include external knowledge samples
+        use_streaming (bool): Whether to use streaming mode for large datasets
+
+    Returns:
+        tuple: (train_dataset, val_dataset, test_dataset)
     """
+    import os
+    import json
+    from datasets import Dataset, IterableDataset
+
     dataset_path = os.path.join(base_path, dataset)
+    train_data = None
+    val_data = None
+    test_data = None
+
+    # Prima carichiamo i dati JSON come facevamo prima
     for file in os.listdir(dataset_path):
         if file.endswith("train.json"):
             with open(os.path.join(dataset_path, file), 'r') as f:
-                train_dataset = json.load(f)
+                train_data = json.load(f)
         elif file.endswith("val.json"):
             with open(os.path.join(dataset_path, file), 'r') as f:
-                val_dataset = json.load(f)
+                val_data = json.load(f)
         elif file.endswith("test.json"):
             with open(os.path.join(dataset_path, file), 'r') as f:
-                test_dataset = json.load(f)
+                test_data = json.load(f)
         else:
             continue
 
+    # Applichiamo il filtro per external_knowledge come prima
     if not external_knowledge:
-        train_dataset = [sample for sample in train_dataset if not sample["need_external_knowledge"]]
-        val_dataset = [sample for sample in val_dataset if not sample["need_external_knowledge"]]
-        test_dataset = [sample for sample in test_dataset if not sample["need_external_knowledge"]]
+        train_data = [sample for sample in train_data if not sample.get("need_external_knowledge", False)]
+        if val_data:
+            val_data = [sample for sample in val_data if not sample.get("need_external_knowledge", False)]
+        if test_data:
+            test_data = [sample for sample in test_data if not sample.get("need_external_knowledge", False)]
 
-    return train_dataset, val_dataset, test_dataset
+    # Se non richiediamo streaming, restituiamo i dataset come prima
+    if not use_streaming:
+        return train_data, val_data, test_data
+
+    # Altrimenti convertiamo in dataset HF con streaming
+    else:
+        print(f"Converting dataset {dataset} to streaming format...")
+
+        # Funzione helper per convertire lista di dict in dataset con streaming
+        def convert_to_streaming_dataset(data_list):
+            if not data_list:
+                return None
+
+            # IMPORTANTE: Modifichiamo il generatore per restituire direttamente gli esempi,
+            # non le tuple (indice, esempio)
+            def gen_examples():
+                for example in data_list:
+                    yield example  # Restituisce direttamente l'esempio, non la tupla (indice, esempio)
+
+            # Creiamo un dataset iterabile (streaming)
+            # Usiamo from_generator senza specificare la firma per evitare tuple (indice, esempio)
+            streaming_dataset = IterableDataset.from_generator(gen_examples)
+
+            return streaming_dataset
+
+        # Convertiamo i tre split
+        train_dataset = convert_to_streaming_dataset(train_data)
+        val_dataset = convert_to_streaming_dataset(val_data) if val_data else None
+        test_dataset = convert_to_streaming_dataset(test_data) if test_data else None
+
+        print(f"Successfully created streaming datasets")
+        return train_dataset, val_dataset, test_dataset
 
 
 def convert_to_conversation(sample):
@@ -45,30 +97,30 @@ def convert_to_conversation(sample):
         conversation = [
             { "role": "user",
               "content" : [
-                {"type" : "text",  "text"  : instruction},
-                {"type" : "text",  "text"  : sample["question"]},
-                {"type" : "image", "image" : extract_image(sample["image"])},
-                #TODO: METTERE DESCRIZIONE QUADRO
-                {"type" : "text",  "text"  : sample["external_knowledge"]} ]
-            },
+                  {"type" : "text",  "text"  : instruction},
+                  {"type" : "text",  "text"  : sample["question"]},
+                  {"type" : "image", "image" : extract_image(sample["image"])},
+                  #TODO: METTERE DESCRIZIONE QUADRO
+                  {"type" : "text",  "text"  : sample["external_knowledge"]} ]
+              },
             { "role" : "assistant",
               "content" : [
-                {"type" : "text",  "text"  : sample["answer"]} ]
-            },
+                  {"type" : "text",  "text"  : sample["answer"]} ]
+              },
         ]
 
     else:
         conversation = [
-        { "role": "user",
-          "content" : [
-            {"type" : "text",  "text"  : instruction},
-            {"type" : "text",  "text"  : sample["question"]},
-            {"type" : "image", "image" : extract_image(sample["image"])} ]
-        },
-        { "role" : "assistant",
-          "content" : [
-            {"type" : "text",  "text"  : sample["answer"]} ]
-        },
-    ]
+            { "role": "user",
+              "content" : [
+                  {"type" : "text",  "text"  : instruction},
+                  {"type" : "text",  "text"  : sample["question"]},
+                  {"type" : "image", "image" : extract_image(sample["image"])} ]
+              },
+            { "role" : "assistant",
+              "content" : [
+                  {"type" : "text",  "text"  : sample["answer"]} ]
+              },
+        ]
     return { "messages" : conversation }
 pass

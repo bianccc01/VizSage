@@ -47,3 +47,10 @@ wandb_tags: ["llama3", "vision", "finetune"]
 
 # Output settings
 output_dir: "outputs"
+
+# Opzioni di streaming - NUOVE
+use_streaming: true                # Attiva la modalità streaming
+stream_buffer_size: 1000           # Dimensione buffer per shuffle
+max_steps: 5000                    # Numero massimo di passi di training
+save_steps: 100                    # Salva checkpoint ogni tot passi
+test_samples_to_check: 1           # Campioni da prelevare dal test set

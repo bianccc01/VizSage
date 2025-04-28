@@ -14,9 +14,42 @@ import wandb
 import socket
 from datetime import datetime
 import random
+from datasets import Dataset, load_from_disk
+import tempfile
+import json
+
 
 # Load environment variables from .env file
 load_dotenv()
+
+
+def prepare_streaming_dataset(streaming_dataset, config):
+    """
+    Prepara un dataset streaming per il training
+
+    Args:
+        streaming_dataset: Dataset HF in modalità streaming
+        config: Configurazione del training
+
+    Returns:
+        Dataset: Dataset processato pronto per il training
+    """
+    if streaming_dataset is None:
+        return None
+
+    # Applicare un buffer limitato per lo shuffle
+    buffer_size = config.get("stream_buffer_size", 1000)
+    dataset = streaming_dataset.shuffle(buffer_size=buffer_size)
+
+    # Convertire ogni esempio nel formato di conversazione
+    def convert_to_conversation_streaming(example):
+        # L'esempio è già il dizionario completo, non una tupla
+        return dp.convert_to_conversation(example)
+
+    # Applicare la trasformazione al dataset
+    processed_dataset = dataset.map(convert_to_conversation_streaming)
+
+    return processed_dataset
 
 
 def load_config(config_file="config.yaml"):
@@ -190,6 +223,117 @@ def train(model, tokenizer, converted_dataset, config, wandb_run=None):
     return trainer
 
 
+def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None):
+    """Train the model with streaming dataset"""
+
+    # Enable model for training
+    FastVisionModel.for_training(model)
+
+    # Set BF16/FP16 based on configuration and hardware support
+    use_bf16 = is_bf16_supported() and config.get("use_bf16", True)
+    use_fp16 = not use_bf16
+
+    # Set wandb logging
+    report_to = "wandb" if wandb_run else "none"
+
+    # Assicurati che max_steps sia un intero positivo
+    max_steps = config.get("max_steps", 1000)
+    if max_steps is None or max_steps <= 0:
+        max_steps = 1000
+
+    # Create output directory
+    output_dir = config.get("output_dir", "outputs")
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Configure trainer per lo streaming
+    trainer = SFTTrainer(
+        model=model,
+        tokenizer=tokenizer,
+        data_collator=UnslothVisionDataCollator(model, tokenizer),
+        train_dataset=streaming_dataset,
+        args=SFTConfig(
+            per_device_train_batch_size=config.get("batch_size", 2),
+            gradient_accumulation_steps=config.get("grad_accum", 4),
+            warmup_steps=config.get("warmup_steps", 5),
+            # Per lo streaming usiamo max_steps invece di epochs
+            max_steps=max_steps,
+            # CORREZIONE: Imposta num_train_epochs a un valore intero invece di None
+            # Questo evita l'errore di confronto tra None e int
+            num_train_epochs=1,  # Valore nominale, verrà ignorato quando max_steps > 0
+            learning_rate=config.get("lr", 2e-4),
+            fp16=use_fp16,
+            bf16=use_bf16,
+            logging_steps=config.get("logging_steps", 1),
+            optim=config.get("optim", "adamw_8bit"),
+            weight_decay=config.get("weight_decay", 0.01),
+            lr_scheduler_type=config.get("scheduler", "linear"),
+            seed=config.get("seed", 3407),
+            output_dir=output_dir,
+            report_to=report_to,
+            run_name=wandb_run.name if wandb_run else None,
+
+            # Modifica le strategie di salvataggio per lo streaming
+            save_strategy="steps",
+            save_steps=config.get("save_steps", 100),
+
+            # Required parameters for vision finetuning (invariati)
+            remove_unused_columns=False,
+            dataset_text_field="",
+            dataset_kwargs={"skip_prepare_dataset": True},
+            dataset_num_proc=config.get("num_proc", 4),
+            max_seq_length=config.get("max_seq_length", 2048),
+        ),
+    )
+
+    # Start training
+    print(
+        f"Starting streaming training with batch size {config.get('batch_size', 2)} and max steps {max_steps}")
+    trainer.train()
+
+    # Il resto della funzione rimane invariato...
+    final_model_path = f"{output_dir}/VizSage_final_model"
+    model.save_pretrained(final_model_path)
+    tokenizer.save_pretrained(final_model_path)
+    print(f"Model saved to {final_model_path}")
+
+    # Log model metadata to wandb if enabled
+    if wandb_run:
+        # Adatta il logging wandb per lo streaming
+        wandb_run.summary.update({
+            "training_completed": True,
+            "completion_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "final_model_path": final_model_path,
+        })
+
+        # Create a text summary instead of saving the model card as an artifact
+        model_card_text = f"""
+        # VizSage Model Summary
+
+        ## Model Information
+        - Base model: {config.get('model_name')}
+        - Fine-tuned on: {config.get('dataset')}
+        - Date: {datetime.now().strftime("%Y-%m-%d")}
+
+        ## Training Parameters
+        - Batch size: {config.get('batch_size')}
+        - Learning rate: {config.get('lr')}
+        - Max steps: {max_steps}
+        - LoRA rank: {config.get('lora_r')}
+        - Training mode: Streaming
+
+        ## Local Path
+        - Saved to: {final_model_path}
+        """
+
+        # Log the text summary directly to wandb
+        wandb.log({"model_card": wandb.Html(model_card_text.replace('\n', '<br>'))})
+
+        # Also save the model card locally
+        with open(f"{final_model_path}/model_card.md", "w") as f:
+            f.write(model_card_text)
+
+    return trainer
+
 def get_model_from_config(config):
     """Get model and tokenizer using parameters from config"""
     model, tokenizer = m.get_model(
@@ -235,61 +379,112 @@ if __name__ == "__main__":
     # Load model using config parameters
     model, tokenizer = get_model_from_config(config)
 
-    # Load dataset using data_preprocessing module
+    # Verifica se usare streaming dalla configurazione
+    use_streaming = config.get("use_streaming", False)
+
+    # Carica il dataset usando l'opzione streaming
     train_dataset, val_dataset, test_dataset = dp.get_dataset(
         base_path="data",
         dataset=config.get("dataset", "AQUA"),
-        external_knowledge=config.get("external_knowledge", False)
+        external_knowledge=config.get("external_knowledge", False),
+        use_streaming=use_streaming  # Nuovo parametro
     )
 
-    # Convert train dataset to conversation format
-    converted_dataset = [dp.convert_to_conversation(sample) for sample in train_dataset]
+    # Setup diversi a seconda della modalità streaming
+    if use_streaming:
+        print("Using streaming mode for dataset processing")
 
-    # Log dataset information to wandb
-    if wandb_run:
-        wandb_run.log({
-            "train_dataset_size": len(train_dataset),
-            "val_dataset_size": len(val_dataset) if val_dataset else 0,
-            "test_dataset_size": len(test_dataset) if test_dataset else 0,
-        })
+        # Preparazione del dataset per il training
+        stream_ready_dataset = prepare_streaming_dataset(train_dataset, config)
 
-    # Seed random with current time to ensure different examples each run
-    import time
+        # Per l'esempio di inferenza in modalità streaming, prendiamo un campione dal test set
+        if test_dataset:
+            # In modalità streaming, ora l'iterazione restituisce direttamente gli esempi
+            test_sample = None
+            for i, example in enumerate(test_dataset):
+                if i == 0:  # Prendiamo solo il primo esempio
+                    test_sample = example
+                    break
 
-    random.seed(int(time.time()))
+            if test_sample:
+                image = test_sample["image"]
+                question = test_sample["question"]
+                ground_truth = test_sample["answer"]
 
-    # Select a test sample that will be used for pre and post training comparison
-    index = random.randint(0, len(test_dataset) - 1)
-    sample = test_dataset[index]
-    image = sample["image"]
-    question = sample["question"]
-    ground_truth = sample["answer"]
+                print("\n=== PRE-TRAINING INFERENCE ===")
+                print(f"Question: {question}")
+                print(f"Image path: {image}")
+                print(f"Ground truth answer: {ground_truth}")
+                print("Model prediction:")
+                pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image=image, question=question)
 
-    print("\n=== PRE-TRAINING INFERENCE ===")
-    print(f"Test example index: {index}")
-    print(f"Question: {question}")
-    print(f"Image path: {image}")
-    print(f"Ground truth answer: {ground_truth}")
-    print("Model prediction:")
-    pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image=image, question=question)
+                # Salva i riferimenti per il test post-training
+                post_training_test_sample = {
+                    "image": image,
+                    "question": question,
+                    "answer": ground_truth
+                }
+            else:
+                print("Could not extract a test sample from streaming dataset")
+                post_training_test_sample = None
+        else:
+            print("No test dataset available")
+            post_training_test_sample = None
 
-    # Train the model
-    print("\n=== STARTING TRAINING ===")
-    trainer = train(model, tokenizer, converted_dataset, config, wandb_run)
+        # Train the model
+        print("\n=== STARTING TRAINING ===")
+        trainer = train_streaming(model, tokenizer, stream_ready_dataset, config, wandb_run)
+
+    else:
+        # Modalità originale non-streaming
+        # Converti il dataset di training nel formato conversazione
+        converted_dataset = [dp.convert_to_conversation(sample) for sample in train_dataset]
+
+        # Seleziona un campione di test come nell'originale
+        if test_dataset:
+            index = random.randint(0, len(test_dataset) - 1)
+            sample = test_dataset[index]
+            image = sample["image"]
+            question = sample["question"]
+            ground_truth = sample["answer"]
+
+            print("\n=== PRE-TRAINING INFERENCE ===")
+            print(f"Test example index: {index}")
+            print(f"Question: {question}")
+            print(f"Image path: {image}")
+            print(f"Ground truth answer: {ground_truth}")
+            print("Model prediction:")
+            pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image=image, question=question)
+
+            # Salva i riferimenti per il test post-training
+            post_training_test_sample = sample
+        else:
+            post_training_test_sample = None
+
+        # Train the model
+        print("\n=== STARTING TRAINING ===")
+        trainer = train(model, tokenizer, converted_dataset, config, wandb_run)
+
     print("Training completed successfully!")
 
-    # Perform inference with the same sample after training
-    print("\n=== POST-TRAINING INFERENCE ===")
-    print(f"Question: {question}")
-    print(f"Ground truth answer: {ground_truth}")
-    print("Model prediction:")
-    post_training_output = m.make_inference(model=model, tokenizer=tokenizer, image=image, question=question)
+    # Inference post-training - funziona in entrambe le modalità
+    if post_training_test_sample:
+        print("\n=== POST-TRAINING INFERENCE ===")
+        print(f"Question: {post_training_test_sample['question']}")
+        print(f"Ground truth answer: {post_training_test_sample['answer']}")
+        print("Model prediction:")
+        post_training_output = m.make_inference(
+            model=model,
+            tokenizer=tokenizer,
+            image=post_training_test_sample['image'],
+            question=post_training_test_sample['question']
+        )
 
-    # Compare the results
-    print("\n=== COMPARISON ===")
-    print(f"Ground truth: {ground_truth}")
-    print(f"Pre-training: {pre_training_output}")
-    print(f"Post-training: {post_training_output}")
+        # Compare the results
+        print("\n=== COMPARISON ===")
+        print(f"Ground truth: {post_training_test_sample['answer']}")
+        print(f"Pre-training: {pre_training_output}")
+        print(f"Post-training: {post_training_output}")
 
     # Save the model if configured to do so
     if config.get("save_model", False):
