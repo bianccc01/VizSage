@@ -53,9 +53,9 @@ def get_model(model_name = "unsloth/Llama-3.2-11B-Vision-Instruct", load_in_4bit
     return model, tokenizer
 
 
-def make_inference(model, tokenizer, image, question, max_length = 512,
-                      temperature = 0.1, top_p = 0.95, top_k = 50, num_beams = 4,
-                      do_sample = True, return_dict = True):
+def make_inference(model, tokenizer, image, question, max_length=512,
+                   temperature=0.1, top_p=0.95, top_k=50, num_beams=1,
+                   do_sample=True, return_dict=True):
     """
     Make an inference with the model and tokenizer.
     """
@@ -79,17 +79,29 @@ def make_inference(model, tokenizer, image, question, max_length = 512,
         return_tensors="pt",
     ).to("cuda")
 
-    text_streamer = TextStreamer(tokenizer, skip_prompt=True)
+    # Generate without streaming
     outputs = model.generate(
-        inputs,
+        **inputs,
         max_length=max_length,
         temperature=temperature,
         top_p=top_p,
         top_k=top_k,
-        num_beams=num_beams,
+        num_beams=1,
         do_sample=do_sample,
-        return_dict=return_dict,
-        streamer=text_streamer
+        return_dict=return_dict
+        # No streamer
     )
 
-    return outputs
+    # Get the full text
+    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+    # Extract just the assistant's response
+    if "assistant" in generated_text:
+        assistant_response = generated_text.split("assistant", 1)[1].strip()
+    else:
+        assistant_response = generated_text
+
+    # Explicitly print it once
+    print(assistant_response)
+
+    return assistant_response

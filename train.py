@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 import wandb
 import socket
 from datetime import datetime
+import random
 
 # Load environment variables from .env file
 load_dotenv()
@@ -252,11 +253,54 @@ if __name__ == "__main__":
             "test_dataset_size": len(test_dataset) if test_dataset else 0,
         })
 
+    # Seed random with current time to ensure different examples each run
+    import time
+
+    random.seed(int(time.time()))
+
+    # Select a test sample that will be used for pre and post training comparison
+    index = random.randint(0, len(test_dataset) - 1)
+    sample = test_dataset[index]
+    image = sample["image"]
+    question = sample["question"]
+    ground_truth = sample["answer"]
+
+    print("\n=== PRE-TRAINING INFERENCE ===")
+    print(f"Test example index: {index}")
+    print(f"Question: {question}")
+    print(f"Image path: {image}")
+    print(f"Ground truth answer: {ground_truth}")
+    print("Model prediction:")
+    pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image=image, question=question)
+
     # Train the model
+    print("\n=== STARTING TRAINING ===")
     trainer = train(model, tokenizer, converted_dataset, config, wandb_run)
+    print("Training completed successfully!")
+
+    # Perform inference with the same sample after training
+    print("\n=== POST-TRAINING INFERENCE ===")
+    print(f"Question: {question}")
+    print(f"Ground truth answer: {ground_truth}")
+    print("Model prediction:")
+    post_training_output = m.make_inference(model=model, tokenizer=tokenizer, image=image, question=question)
+
+    # Compare the results
+    print("\n=== COMPARISON ===")
+    print(f"Ground truth: {ground_truth}")
+    print(f"Pre-training: {pre_training_output}")
+    print(f"Post-training: {post_training_output}")
+
+    # Save the model if configured to do so
+    if config.get("save_model", False):
+        save_path = config.get("save_path", "models/trained_model")
+        print(f"\nSaving model to {save_path}")
+        model.save_pretrained(save_path)
+        tokenizer.save_pretrained(save_path)
+        print("Model saved successfully!")
 
     # Close wandb run
     if wandb_run:
         wandb_run.finish()
 
-    print("Training completed successfully!")
+    print("Training script completed successfully!")

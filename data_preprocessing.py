@@ -5,8 +5,7 @@ import os
 import json
 
 
-def extract_image(sample, base_path="data"):
-    image_name = sample["image"]
+def extract_image(image_name, base_path="data"):
     images_path = os.path.join(base_path, "Images")
     image_path = os.path.join(images_path, image_name)
     image = Image.open(image_path).convert("RGB")
@@ -48,7 +47,7 @@ def convert_to_conversation(sample):
               "content" : [
                 {"type" : "text",  "text"  : instruction},
                 {"type" : "text",  "text"  : sample["question"]},
-                {"type" : "image", "image" : extract_image(sample)},
+                {"type" : "image", "image" : extract_image(sample["image"])},
                 #TODO: METTERE DESCRIZIONE QUADRO
                 {"type" : "text",  "text"  : sample["external_knowledge"]} ]
             },
@@ -64,7 +63,7 @@ def convert_to_conversation(sample):
           "content" : [
             {"type" : "text",  "text"  : instruction},
             {"type" : "text",  "text"  : sample["question"]},
-            {"type" : "image", "image" : extract_image(sample)} ]
+            {"type" : "image", "image" : extract_image(sample["image"])} ]
         },
         { "role" : "assistant",
           "content" : [
