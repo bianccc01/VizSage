@@ -34,7 +34,7 @@ def get_dataset(base_path="data", dataset="AQUA", external_knowledge=False, use_
     val_data = None
     test_data = None
 
-    # Prima carichiamo i dati JSON come facevamo prima
+    # First load the dataset files
     for file in os.listdir(dataset_path):
         if file.endswith("train.json"):
             with open(os.path.join(dataset_path, file), 'r') as f:
@@ -48,7 +48,7 @@ def get_dataset(base_path="data", dataset="AQUA", external_knowledge=False, use_
         else:
             continue
 
-    # Applichiamo il filtro per external_knowledge come prima
+    # Filter the dataset based on external knowledge requirement
     if not external_knowledge:
         train_data = [sample for sample in train_data if not sample.get("need_external_knowledge", False)]
         if val_data:
@@ -56,32 +56,30 @@ def get_dataset(base_path="data", dataset="AQUA", external_knowledge=False, use_
         if test_data:
             test_data = [sample for sample in test_data if not sample.get("need_external_knowledge", False)]
 
-    # Se non richiediamo streaming, restituiamo i dataset come prima
+    # If not using streaming, return the datasets as normal
     if not use_streaming:
         return train_data, val_data, test_data
 
-    # Altrimenti convertiamo in dataset HF con streaming
+    # If using streaming, convert the datasets to streaming format
     else:
         print(f"Converting dataset {dataset} to streaming format...")
 
-        # Funzione helper per convertire lista di dict in dataset con streaming
+        # Helper function to convert a list of data to a streaming dataset
         def convert_to_streaming_dataset(data_list):
             if not data_list:
                 return None
 
-            # IMPORTANTE: Modifichiamo il generatore per restituire direttamente gli esempi,
-            # non le tuple (indice, esempio)
+            # edit generator to yield examples
             def gen_examples():
                 for example in data_list:
-                    yield example  # Restituisce direttamente l'esempio, non la tupla (indice, esempio)
+                    yield example
 
-            # Creiamo un dataset iterabile (streaming)
-            # Usiamo from_generator senza specificare la firma per evitare tuple (indice, esempio)
+            # Create a streaming dataset from the generator
             streaming_dataset = IterableDataset.from_generator(gen_examples)
 
             return streaming_dataset
 
-        # Convertiamo i tre split
+        # Split the data into train, val, and test datasets
         train_dataset = convert_to_streaming_dataset(train_data)
         val_dataset = convert_to_streaming_dataset(val_data) if val_data else None
         test_dataset = convert_to_streaming_dataset(test_data) if test_data else None

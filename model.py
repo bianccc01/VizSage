@@ -89,7 +89,6 @@ def make_inference(model, tokenizer, image, question, max_length=512,
         num_beams=1,
         do_sample=do_sample,
         return_dict=return_dict
-        # No streamer
     )
 
     # Get the full text
@@ -101,7 +100,6 @@ def make_inference(model, tokenizer, image, question, max_length=512,
     else:
         assistant_response = generated_text
 
-    # Explicitly print it once
     print(assistant_response)
 
     return assistant_response

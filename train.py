@@ -25,28 +25,27 @@ load_dotenv()
 
 def prepare_streaming_dataset(streaming_dataset, config):
     """
-    Prepara un dataset streaming per il training
+    Prepare the streaming dataset for training.
 
     Args:
-        streaming_dataset: Dataset HF in modalità streaming
-        config: Configurazione del training
+        streaming_dataset (IterableDataset): Streaming dataset to be processed
+        config (dict): Configuration dictionary containing training parameters
 
     Returns:
-        Dataset: Dataset processato pronto per il training
+        Dataset: Processed dataset ready for training
     """
     if streaming_dataset is None:
         return None
 
-    # Applicare un buffer limitato per lo shuffle
+    # Apply limit to the dataset if specified
     buffer_size = config.get("stream_buffer_size", 1000)
     dataset = streaming_dataset.shuffle(buffer_size=buffer_size)
 
-    # Convertire ogni esempio nel formato di conversazione
+    # Convert every example to a conversation format
     def convert_to_conversation_streaming(example):
-        # L'esempio è già il dizionario completo, non una tupla
         return dp.convert_to_conversation(example)
 
-    # Applicare la trasformazione al dataset
+    # Apply the conversion function to the streaming dataset
     processed_dataset = dataset.map(convert_to_conversation_streaming)
 
     return processed_dataset
@@ -236,7 +235,7 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None)
     # Set wandb logging
     report_to = "wandb" if wandb_run else "none"
 
-    # Assicurati che max_steps sia un intero positivo
+    # Set max steps for streaming
     max_steps = config.get("max_steps", 1000)
     if max_steps is None or max_steps <= 0:
         max_steps = 1000
@@ -255,11 +254,9 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None)
             per_device_train_batch_size=config.get("batch_size", 2),
             gradient_accumulation_steps=config.get("grad_accum", 4),
             warmup_steps=config.get("warmup_steps", 5),
-            # Per lo streaming usiamo max_steps invece di epochs
+            # For streaming, set max_steps to a positive integer
             max_steps=max_steps,
-            # CORREZIONE: Imposta num_train_epochs a un valore intero invece di None
-            # Questo evita l'errore di confronto tra None e int
-            num_train_epochs=1,  # Valore nominale, verrà ignorato quando max_steps > 0
+            num_train_epochs=1,  # Set to 1 for streaming, it's not used
             learning_rate=config.get("lr", 2e-4),
             fp16=use_fp16,
             bf16=use_bf16,
@@ -272,11 +269,10 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None)
             report_to=report_to,
             run_name=wandb_run.name if wandb_run else None,
 
-            # Modifica le strategie di salvataggio per lo streaming
+            # Edit this to save the model every N steps
             save_strategy="steps",
             save_steps=config.get("save_steps", 100),
 
-            # Required parameters for vision finetuning (invariati)
             remove_unused_columns=False,
             dataset_text_field="",
             dataset_kwargs={"skip_prepare_dataset": True},
@@ -289,8 +285,9 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None)
     print(
         f"Starting streaming training with batch size {config.get('batch_size', 2)} and max steps {max_steps}")
     trainer.train()
+    print("Training completed successfully!")
 
-    # Il resto della funzione rimane invariato...
+    # Save final model
     final_model_path = f"{output_dir}/VizSage_final_model"
     model.save_pretrained(final_model_path)
     tokenizer.save_pretrained(final_model_path)
@@ -379,34 +376,59 @@ if __name__ == "__main__":
     # Load model using config parameters
     model, tokenizer = get_model_from_config(config)
 
-    # Verifica se usare streaming dalla configurazione
+    # Check use streaming option
     use_streaming = config.get("use_streaming", False)
 
-    # Carica il dataset usando l'opzione streaming
+    # Load dataset
     train_dataset, val_dataset, test_dataset = dp.get_dataset(
         base_path="data",
         dataset=config.get("dataset", "AQUA"),
         external_knowledge=config.get("external_knowledge", False),
-        use_streaming=use_streaming  # Nuovo parametro
+        use_streaming=use_streaming
     )
 
-    # Setup diversi a seconda della modalità streaming
+    # Seed random for reproducibility or different results each run
+    import time
+
+    random.seed(int(time.time()))  # Comment this line for reproducible results
+
+    # Different setup for streaming vs non-streaming
     if use_streaming:
         print("Using streaming mode for dataset processing")
 
-        # Preparazione del dataset per il training
+        # Prepare the streaming dataset
         stream_ready_dataset = prepare_streaming_dataset(train_dataset, config)
 
-        # Per l'esempio di inferenza in modalità streaming, prendiamo un campione dal test set
+        # For the inference example - Select a random test sample
         if test_dataset:
-            # In modalità streaming, ora l'iterazione restituisce direttamente gli esempi
-            test_sample = None
+            # Estimate the size of the test dataset
+            test_size = 0
+            temp_samples = []
+
+            # Collect a few samples to estimate size and select from
+            max_samples_to_collect = 10  # Limit number of samples to avoid memory issues
             for i, example in enumerate(test_dataset):
-                if i == 0:  # Prendiamo solo il primo esempio
-                    test_sample = example
+                test_size += 1
+                if len(temp_samples) < max_samples_to_collect:
+                    temp_samples.append(example)
+                if i >= 100:  # Stop after 100 to avoid iterating the whole dataset
                     break
 
-            if test_sample:
+            if test_size > 0:
+                # Select a random sample from the collected ones
+                if temp_samples:
+                    random_index = random.randint(0, len(temp_samples) - 1)
+                    test_sample = temp_samples[random_index]
+                    print(
+                        f"Selected random test sample (index {random_index} of {len(temp_samples)} collected samples)")
+                else:
+                    # Fallback: take the first one if we couldn't collect any
+                    for i, example in enumerate(test_dataset):
+                        if i == 0:
+                            test_sample = example
+                            break
+                    print("Using first test sample (couldn't collect samples)")
+
                 image = test_sample["image"]
                 question = test_sample["question"]
                 ground_truth = test_sample["answer"]
@@ -418,7 +440,7 @@ if __name__ == "__main__":
                 print("Model prediction:")
                 pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image=image, question=question)
 
-                # Salva i riferimenti per il test post-training
+                # Save the test sample for post-training inference
                 post_training_test_sample = {
                     "image": image,
                     "question": question,
@@ -436,12 +458,12 @@ if __name__ == "__main__":
         trainer = train_streaming(model, tokenizer, stream_ready_dataset, config, wandb_run)
 
     else:
-        # Modalità originale non-streaming
-        # Converti il dataset di training nel formato conversazione
+        # Non streaming mode
         converted_dataset = [dp.convert_to_conversation(sample) for sample in train_dataset]
 
-        # Seleziona un campione di test come nell'originale
+        # Select a random sample for pre-training inference
         if test_dataset:
+            # Select a truly random index from the entire test dataset
             index = random.randint(0, len(test_dataset) - 1)
             sample = test_dataset[index]
             image = sample["image"]
@@ -449,14 +471,14 @@ if __name__ == "__main__":
             ground_truth = sample["answer"]
 
             print("\n=== PRE-TRAINING INFERENCE ===")
-            print(f"Test example index: {index}")
+            print(f"Test example index: {index} of {len(test_dataset)}")
             print(f"Question: {question}")
             print(f"Image path: {image}")
             print(f"Ground truth answer: {ground_truth}")
             print("Model prediction:")
             pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image=image, question=question)
 
-            # Salva i riferimenti per il test post-training
+            # Save the test sample for post-training inference
             post_training_test_sample = sample
         else:
             post_training_test_sample = None
@@ -467,7 +489,7 @@ if __name__ == "__main__":
 
     print("Training completed successfully!")
 
-    # Inference post-training - funziona in entrambe le modalità
+    # Inference post-training
     if post_training_test_sample:
         print("\n=== POST-TRAINING INFERENCE ===")
         print(f"Question: {post_training_test_sample['question']}")

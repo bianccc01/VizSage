@@ -15,7 +15,7 @@ VizSage is a streamlined framework for fine-tuning vision-language models (VLMs)
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.10
 - CUDA-compatible GPU with 16GB+ VRAM (recommended)
 - Hugging Face API key (required for accessing model weights)
 - Weights & Biases API key (optional, for experiment tracking)
@@ -33,14 +33,14 @@ VizSage is a streamlined framework for fine-tuning vision-language models (VLMs)
    pip install -r requirements.txt
    ```
 
-3. Create your `.env` file from the template:
+3. Create your `.env`:
    ```bash
-   cp .env.template .env
+   touch .env
    ```
 
 4. Edit the `.env` file to add your API keys:
    ```
-   HUGGINGFACE_TOKEN=your_hf_token_here  # Required for downloading models
+   HF_TOKEN=your_hf_token_here  # Required for downloading models
    WANDB_API_KEY=your_wandb_api_key_here  # Optional for experiment tracking
    ```
 
@@ -54,11 +54,11 @@ VizSage is a streamlined framework for fine-tuning vision-language models (VLMs)
    - Place the images in your desired directory (you'll configure this path in the next step)
 
 7. Update the `base_path` in the configuration:
-   - In the `train_with_config.py` file, find the line where `dp.get_dataset` is called
+   - In the `train.py` file, find the line where `dp.get_dataset` is called
    - Update the `base_path` parameter to point to your data directory, for example:
      ```python
      train_dataset, val_dataset, test_dataset = dp.get_dataset(
-         base_path="/path/to/your/data",  # Update this path
+         base_path="data",  # Update this path if your data is in a different location
          dataset=config.get("dataset", "AQUA"),
          external_knowledge=config.get("external_knowledge", False)
      )
@@ -133,7 +133,7 @@ Run the training script:
 python train.py
 ```
 
-Or specify a custom configuration file:
+Or specify a custom configuration file (Different from `config.yaml`):
 
 ```bash
 python train.py custom_config.yaml
