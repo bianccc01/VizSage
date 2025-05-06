@@ -88,7 +88,7 @@ def get_dataset(base_path="data", dataset="AQUA", external_knowledge=False, use_
         return train_dataset, val_dataset, test_dataset
 
 
-def convert_to_conversation(sample):
+def convert_to_conversation(sample, is_test=False):
     instruction = "You are an expert art historian. Answer the questions you will be asked about the image."
 
     if sample["need_external_knowledge"]:
@@ -100,13 +100,15 @@ def convert_to_conversation(sample):
                   {"type" : "image", "image" : extract_image(sample["image"])},
                   #TODO: METTERE DESCRIZIONE QUADRO
                   {"type" : "text",  "text"  : sample["external_knowledge"]} ]
-              },
-            { "role" : "assistant",
-              "content" : [
-                  {"type" : "text",  "text"  : sample["answer"]} ]
-              },
+              }
         ]
-
+        if not is_test:
+            conversation.append(
+                { "role" : "assistant",
+                  "content" : [
+                      {"type" : "text",  "text"  : sample["answer"]} ]
+                }
+            )
     else:
         conversation = [
             { "role": "user",
@@ -114,11 +116,13 @@ def convert_to_conversation(sample):
                   {"type" : "text",  "text"  : instruction},
                   {"type" : "text",  "text"  : sample["question"]},
                   {"type" : "image", "image" : extract_image(sample["image"])} ]
-              },
-            { "role" : "assistant",
-              "content" : [
-                  {"type" : "text",  "text"  : sample["answer"]} ]
-              },
+              }
         ]
+        if not is_test:
+            conversation.append(
+                { "role" : "assistant",
+                  "content" : [
+                      {"type" : "text",  "text"  : sample["answer"]} ]
+                }
+            )
     return { "messages" : conversation }
-pass

@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# train_with_config.py
-
 import yaml
 import sys
 import os
@@ -15,47 +12,12 @@ import socket
 from datetime import datetime
 import random
 from datasets import Dataset, load_from_disk
-import tempfile
-import json
+import utils
 
 
 # Load environment variables from .env file
 load_dotenv()
 
-
-def prepare_streaming_dataset(streaming_dataset, config):
-    """
-    Prepare the streaming dataset for training.
-
-    Args:
-        streaming_dataset (IterableDataset): Streaming dataset to be processed
-        config (dict): Configuration dictionary containing training parameters
-
-    Returns:
-        Dataset: Processed dataset ready for training
-    """
-    if streaming_dataset is None:
-        return None
-
-    # Apply limit to the dataset if specified
-    buffer_size = config.get("stream_buffer_size", 1000)
-    dataset = streaming_dataset.shuffle(buffer_size=buffer_size)
-
-    # Convert every example to a conversation format
-    def convert_to_conversation_streaming(example):
-        return dp.convert_to_conversation(example)
-
-    # Apply the conversion function to the streaming dataset
-    processed_dataset = dataset.map(convert_to_conversation_streaming)
-
-    return processed_dataset
-
-
-def load_config(config_file="config.yaml"):
-    """Load training configuration from YAML file"""
-    with open(config_file, "r") as f:
-        config = yaml.safe_load(f)
-    return config
 
 
 def setup_wandb(config):
@@ -178,8 +140,10 @@ def train(model, tokenizer, converted_dataset, config, wandb_run=None):
     print(f"Starting training with batch size {config.get('batch_size', 2)} and learning rate {config.get('lr', 2e-4)}")
     trainer.train()
 
+    name_trained_model = config.get("name_trained_model", "VizSage_final_model")
+
     # Save final model
-    final_model_path = f"{output_dir}/VizSage_final_model"
+    final_model_path = f"{output_dir}/{name_trained_model}"
     model.save_pretrained(final_model_path)
     tokenizer.save_pretrained(final_model_path)
     print(f"Model saved to {final_model_path}")
@@ -287,8 +251,10 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None)
     trainer.train()
     print("Training completed successfully!")
 
+    name_trained_model = config.get("name_trained_model", "VizSage_final_model")
+
     # Save final model
-    final_model_path = f"{output_dir}/VizSage_final_model"
+    final_model_path = f"{output_dir}/{name_trained_model}"
     model.save_pretrained(final_model_path)
     tokenizer.save_pretrained(final_model_path)
     print(f"Model saved to {final_model_path}")
@@ -354,17 +320,9 @@ def get_model_from_config(config):
 if __name__ == "__main__":
     # Check if a config file was provided as an argument
     config_file = "config.yaml"
-    if len(sys.argv) > 1:
-        config_file = sys.argv[1]
-
-    # Ensure the config file exists
-    if not os.path.exists(config_file):
-        print(f"Error: Config file '{config_file}' not found.")
-        sys.exit(1)
 
     # Load configuration
-    config = load_config(config_file)
-    print(f"Loaded configuration from {config_file}")
+    config = utils.load_config(config_file)
 
     # Setup wandb logging
     wandb_run = setup_wandb(config)
@@ -375,6 +333,9 @@ if __name__ == "__main__":
 
     # Load model using config parameters
     model, tokenizer = get_model_from_config(config)
+
+    # Load instruction
+    instruction = config.get("instruction")
 
     # Check use streaming option
     use_streaming = config.get("use_streaming", False)
@@ -397,7 +358,7 @@ if __name__ == "__main__":
         print("Using streaming mode for dataset processing")
 
         # Prepare the streaming dataset
-        stream_ready_dataset = prepare_streaming_dataset(train_dataset, config)
+        stream_ready_dataset = utils.prepare_streaming_dataset(train_dataset, config)
 
         # For the inference example - Select a random test sample
         if test_dataset:
@@ -438,7 +399,8 @@ if __name__ == "__main__":
                 print(f"Image path: {image}")
                 print(f"Ground truth answer: {ground_truth}")
                 print("Model prediction:")
-                pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image=image, question=question)
+                pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image=image, question=question,
+                                                       instruction=instruction)
 
                 # Save the test sample for post-training inference
                 post_training_test_sample = {
@@ -476,7 +438,8 @@ if __name__ == "__main__":
             print(f"Image path: {image}")
             print(f"Ground truth answer: {ground_truth}")
             print("Model prediction:")
-            pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image=image, question=question)
+            pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image=image, question=question,
+                                                   instruction=instruction)
 
             # Save the test sample for post-training inference
             post_training_test_sample = sample
@@ -499,7 +462,8 @@ if __name__ == "__main__":
             model=model,
             tokenizer=tokenizer,
             image=post_training_test_sample['image'],
-            question=post_training_test_sample['question']
+            question=post_training_test_sample['question'],
+            instruction=instruction
         )
 
         # Compare the results

@@ -53,7 +53,7 @@ def get_model(model_name = "unsloth/Llama-3.2-11B-Vision-Instruct", load_in_4bit
     return model, tokenizer
 
 
-def make_inference(model, tokenizer, image, question, max_length=512,
+def make_inference(model, tokenizer, image_path, question, instruction, max_length=512,
                    temperature=0.1, top_p=0.95, top_k=50, num_beams=1,
                    do_sample=True, return_dict=True):
     """
@@ -61,8 +61,7 @@ def make_inference(model, tokenizer, image, question, max_length=512,
     """
     FastVisionModel.for_inference(model)  # Enable for inference!
 
-    image = data_preprocessing.extract_image(image)
-    instruction = "You are an expert art historian. Answer the questions you will be asked about the image."
+    image = data_preprocessing.extract_image(image_path)
 
     messages = [
         {"role": "user", "content": [
@@ -103,3 +102,14 @@ def make_inference(model, tokenizer, image, question, max_length=512,
     print(assistant_response)
 
     return assistant_response
+
+
+def load_model(output_dir, load_in_4bit=True):
+    """
+    Load the model and tokenizer from the output directory.
+    """
+    model, tokenizer = FastVisionModel.from_pretrained(
+        output_dir,
+        load_in_4bit=load_in_4bit
+    )
+    return model, tokenizer
