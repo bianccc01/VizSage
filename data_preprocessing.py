@@ -58,7 +58,7 @@ def get_dataset(base_path="data", dataset="AQUA", external_knowledge=False, use_
 
     # If not using streaming, return the datasets as normal
     if not use_streaming:
-        return train_data, val_data, test_data
+        return train_data, val_data, test_data, len(train_data)
 
     # If using streaming, convert the datasets to streaming format
     else:
@@ -79,20 +79,21 @@ def get_dataset(base_path="data", dataset="AQUA", external_knowledge=False, use_
 
             return streaming_dataset
 
-        # Split the data into train, val, and test datasets
-        train_dataset = convert_to_streaming_dataset(train_data)
+
+        print(f"Training dataset size: {len(train_data)}")
+        train_dataset = convert_to_streaming_dataset(train_data) if train_data else None
         val_dataset = convert_to_streaming_dataset(val_data) if val_data else None
         test_dataset = convert_to_streaming_dataset(test_data) if test_data else None
 
         print(f"Successfully created streaming datasets")
-        return train_dataset, val_dataset, test_dataset
+        return train_dataset, val_dataset, test_dataset, len(train_data)
 
 
 def convert_to_conversation(sample, semart_dataset= None, is_test=False):
     instruction = "You are an expert art historian. Answer the questions you will be asked about the image."
 
     if sample["need_external_knowledge"]:
-        description = semart_dataset.loc(semart_dataset['image_file'] == sample["image"])['description'].values[0]
+        description = semart_dataset.loc[semart_dataset['image_file'] == sample["image"], 'description'].values[0]
         conversation = [
             { "role": "user",
               "content" : [

@@ -187,7 +187,7 @@ def train(model, tokenizer, converted_dataset, config, wandb_run=None):
     return trainer
 
 
-def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None):
+def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None, len_train_dataset=None):
     """Train the model with streaming dataset"""
 
     # Enable model for training
@@ -209,7 +209,13 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None)
     output_dir = config.get("output_dir", "outputs")
     os.makedirs(output_dir, exist_ok=True)
 
-    # Configure trainer per lo streaming
+    # Calulate max steps based on dataset size
+    max_steps = int(len_train_dataset / (config.get("batch_size", 2) * config.get("grad_accum", 4)))
+
+    # how many times to save the model
+    n_saves = config.get("n_saves", 5)
+    save_steps = max(1, max_steps // n_saves)
+
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -219,9 +225,8 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None)
             per_device_train_batch_size=config.get("batch_size", 2),
             gradient_accumulation_steps=config.get("grad_accum", 4),
             warmup_steps=config.get("warmup_steps", 5),
-            # For streaming, set max_steps to a positive integer
             max_steps=max_steps,
-            num_train_epochs=1,  # Set to 1 for streaming, it's not used
+            num_train_epochs=1,
             learning_rate=config.get("lr", 2e-4),
             fp16=use_fp16,
             bf16=use_bf16,
@@ -233,11 +238,8 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None)
             output_dir=output_dir,
             report_to=report_to,
             run_name=wandb_run.name if wandb_run else None,
-
-            # Edit this to save the model every N steps
             save_strategy="steps",
-            save_steps=config.get("save_steps", 100),
-
+            save_steps=save_steps,
             remove_unused_columns=False,
             dataset_text_field="",
             dataset_kwargs={"skip_prepare_dataset": True},
@@ -342,7 +344,7 @@ if __name__ == "__main__":
     use_streaming = config.get("use_streaming", False)
 
     # Load dataset
-    train_dataset, val_dataset, test_dataset = dp.get_dataset(
+    train_dataset, val_dataset, test_dataset, len_train_dataset = dp.get_dataset(
         base_path="data",
         dataset=config.get("dataset", "AQUA"),
         external_knowledge=config.get("external_knowledge", False),
@@ -435,15 +437,15 @@ if __name__ == "__main__":
             print("No test dataset available")
             post_training_test_sample = None
 
-        # Train the model
+        # Train the model\
         print("\n=== STARTING TRAINING ===")
-        trainer = train_streaming(model, tokenizer, stream_ready_dataset, config, wandb_run)
+        trainer = train_streaming(model, tokenizer, stream_ready_dataset, config, wandb_run, len_train_dataset)
 
     else:
 
         if config.get("external_knowledge", False):
             # Load the external knowledge dataset
-            semart_dataset = pd.read_csv(config.get("external_knowledge_path", "data/semart.csv"))
+            semart_dataset = pd.read_csv(config.get("external_knowledge_path", "data/semart.csv"), sep= '\t', encoding='latin1',header=0)
             # Convert the dataset to a conversation format
             train_dataset = [dp.convert_to_conversation(sample, semart_dataset=semart_dataset) for sample in train_dataset]
         else:

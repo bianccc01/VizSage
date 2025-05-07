@@ -6,7 +6,7 @@ import yaml
 from transformers import FastVisionModel
 from transformers import TextStreamer
 import data_preprocessing as dp
-import tqdm import tqdm
+from tqdm import tqdm
 import torch
 import pandas as pd
 
