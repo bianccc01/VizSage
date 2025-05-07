@@ -55,7 +55,7 @@ def get_model(model_name = "unsloth/Llama-3.2-11B-Vision-Instruct", load_in_4bit
 
 def make_inference(model, tokenizer, image_path, question, instruction, max_length=512,
                    temperature=0.1, top_p=0.95, top_k=50, num_beams=1,
-                   do_sample=True, return_dict=True):
+                   do_sample=True, return_dict=True, description=None):
     """
     Make an inference with the model and tokenizer.
     """
@@ -67,9 +67,11 @@ def make_inference(model, tokenizer, image_path, question, instruction, max_leng
         {"role": "user", "content": [
             {"type": "image"},
             {"type": "text", "text": instruction},
-            {"type": "text", "text": question}
+            {"type": "text", "text": question},
+            {"type": "text", "text": description if description is not None else ""}
         ]}
     ]
+
     input_text = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
     inputs = tokenizer(
         image,
@@ -110,6 +112,7 @@ def load_model(output_dir, load_in_4bit=True):
     """
     model, tokenizer = FastVisionModel.from_pretrained(
         output_dir,
-        load_in_4bit=load_in_4bit
+        load_in_4bit=load_in_4bit,
+        device_map="auto",
     )
     return model, tokenizer

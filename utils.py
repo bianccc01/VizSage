@@ -22,7 +22,7 @@ def load_config(config_file="config.yaml"):
     return config
 
 
-def prepare_streaming_dataset(streaming_dataset, config):
+def prepare_streaming_dataset(streaming_dataset, config, semart_dataset=None):
     """
     Prepare the streaming dataset for training.
 
@@ -41,8 +41,8 @@ def prepare_streaming_dataset(streaming_dataset, config):
     dataset = streaming_dataset.shuffle(buffer_size=buffer_size)
 
     # Convert every example to a conversation format
-    def convert_to_conversation_streaming(example):
-        return dp.convert_to_conversation(example)
+    def convert_to_conversation_streaming(example, semart_dataset=semart_dataset):
+        return dp.convert_to_conversation(example, semart_dataset=semart_dataset)
 
     # Apply the conversion function to the streaming dataset
     processed_dataset = dataset.map(convert_to_conversation_streaming)

@@ -13,6 +13,7 @@ from datetime import datetime
 import random
 from datasets import Dataset, load_from_disk
 import utils
+import pandas as pd
 
 
 # Load environment variables from .env file
@@ -357,8 +358,22 @@ if __name__ == "__main__":
     if use_streaming:
         print("Using streaming mode for dataset processing")
 
-        # Prepare the streaming dataset
-        stream_ready_dataset = utils.prepare_streaming_dataset(train_dataset, config)
+
+        if (config.get("external_knowledge", False)):
+            # Load the external knowledge dataset
+            semart_dataset = pd.read_csv(config.get("external_knowledge_path", "data/semart.csv"), sep= '\t', encoding='latin1',header=0)
+            # Prepare the streaming dataset
+            stream_ready_dataset = utils.prepare_streaming_dataset(
+                streaming_dataset=train_dataset,
+                config=config,
+                semart_dataset=semart_dataset
+            )
+        else:
+            # Prepare the streaming dataset without external knowledge
+            stream_ready_dataset = utils.prepare_streaming_dataset(
+                streaming_dataset=train_dataset,
+                config=config
+            )
 
         # For the inference example - Select a random test sample
         if test_dataset:
@@ -393,14 +408,19 @@ if __name__ == "__main__":
                 image = test_sample["image"]
                 question = test_sample["question"]
                 ground_truth = test_sample["answer"]
+                # If external knowledge is used, get the description
+                if config.get("external_knowledge", False) and test_sample["need_external_knowledge"]:
+                    description = semart_dataset.loc[semart_dataset['image'] == image, 'description'].values[0]
+                else :
+                    description = None
 
                 print("\n=== PRE-TRAINING INFERENCE ===")
                 print(f"Question: {question}")
                 print(f"Image path: {image}")
                 print(f"Ground truth answer: {ground_truth}")
                 print("Model prediction:")
-                pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image=image, question=question,
-                                                       instruction=instruction)
+                pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image_path=image, question=question,
+                                                       instruction=instruction, description=description)
 
                 # Save the test sample for post-training inference
                 post_training_test_sample = {
@@ -420,8 +440,14 @@ if __name__ == "__main__":
         trainer = train_streaming(model, tokenizer, stream_ready_dataset, config, wandb_run)
 
     else:
-        # Non streaming mode
-        converted_dataset = [dp.convert_to_conversation(sample) for sample in train_dataset]
+
+        if config.get("external_knowledge", False):
+            # Load the external knowledge dataset
+            semart_dataset = pd.read_csv(config.get("external_knowledge_path", "data/semart.csv"))
+            # Convert the dataset to a conversation format
+            train_dataset = [dp.convert_to_conversation(sample, semart_dataset=semart_dataset) for sample in train_dataset]
+        else:
+            converted_dataset = [dp.convert_to_conversation(sample) for sample in train_dataset]
 
         # Select a random sample for pre-training inference
         if test_dataset:
@@ -438,7 +464,7 @@ if __name__ == "__main__":
             print(f"Image path: {image}")
             print(f"Ground truth answer: {ground_truth}")
             print("Model prediction:")
-            pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image=image, question=question,
+            pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image_path=image, question=question,
                                                    instruction=instruction)
 
             # Save the test sample for post-training inference
@@ -461,7 +487,7 @@ if __name__ == "__main__":
         post_training_output = m.make_inference(
             model=model,
             tokenizer=tokenizer,
-            image=post_training_test_sample['image'],
+            image_path=post_training_test_sample['image'],
             question=post_training_test_sample['question'],
             instruction=instruction
         )

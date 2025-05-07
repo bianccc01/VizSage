@@ -41,6 +41,7 @@ use_bf16: true
 # Dataset parameters
 dataset: "AQUA"
 external_knowledge: false
+external_knowledge_path: "data/semart.csv"
 num_proc: 4
 max_seq_length: 2048
 

@@ -1,4 +1,4 @@
-import model
+import model as model_utils
 import config
 import os
 import sys
@@ -6,7 +6,9 @@ import yaml
 from transformers import FastVisionModel
 from transformers import TextStreamer
 import data_preprocessing as dp
-import tqdm
+import tqdm import tqdm
+import torch
+import pandas as pd
 
 import utils
 
@@ -17,16 +19,19 @@ if __name__ == "__main__":
     # Load configuration
     config = utils.load_config(config_file)
     print(f"Loaded configuration from {config_file}")
-    path = config.get("output")+ "/" +config.get("model_name")
+    path = config.get("output_dir")+ "/" + config.get("name_trained_model")
     load_in_4bit = config.get("load_in_4bit")
-    model, tokenizer = model.load_model(
+
+    torch.cuda.empty_cache()
+
+    model, tokenizer = model_utils.load_model(
         output_dir=path,
         load_in_4bit=load_in_4bit
     )
 
-    FastVisionModel.for_inference(model) # Enable for inference!
-    # Load the test dataset
+    print("Model loaded successfully.")
 
+    # Load the test dataset
     use_streaming = config.get("use_streaming", True)
 
     train_dataset, val_dataset, test_dataset = dp.get_dataset(
@@ -36,6 +41,13 @@ if __name__ == "__main__":
         use_streaming=use_streaming
     )
 
+
+    description = None
+
+    if config.get("external_knowledge", False):
+        # If external knowledge is used, we need to load the semart dataset
+        semart_dataset = pd.read_csv(config.get("external_knowledge_path", "data/semart.csv"), sep= '\t', encoding='latin1',header=0)
+
     # create a json with image_path, question, response for each sample of test_dataset
     output_json = []
     with tqdm (total=len(test_dataset), desc="Processing samples") as pbar:
@@ -43,27 +55,25 @@ if __name__ == "__main__":
             image_path = sample.get("image")
             question = sample.get("question")
             ground_truth = sample.get("answer")
-
-            # Check if the image path is valid
-            if not os.path.exists(image_path):
-                print(f"Image path {image_path} does not exist.")
-                continue
+            description = semart_dataset.loc[semart_dataset['image'] == image_path, 'description'].values[0] if config.get("external_knowledge", False) else None
 
             instruction = config.get("instruction")
 
             # Make inference
-            response = model.make_inference(
+            response = model_utils.make_inference(
                 model = model,
                 tokenizer = tokenizer,
                 image_path = image_path,
                 question = question,
-                instruction = instruction
+                instruction = instruction,
+                description = description,
             )
 
             # Append to output json
             output_json.append({
                 "image_path": image_path,
                 "question": question,
+                "description": description if description is not None else "",
                 "response": response,
                 "ground_truth": ground_truth
             })

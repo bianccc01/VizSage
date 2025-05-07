@@ -88,18 +88,18 @@ def get_dataset(base_path="data", dataset="AQUA", external_knowledge=False, use_
         return train_dataset, val_dataset, test_dataset
 
 
-def convert_to_conversation(sample, is_test=False):
+def convert_to_conversation(sample, semart_dataset= None, is_test=False):
     instruction = "You are an expert art historian. Answer the questions you will be asked about the image."
 
     if sample["need_external_knowledge"]:
+        description = semart_dataset.loc(semart_dataset['image_file'] == sample["image"])['description'].values[0]
         conversation = [
             { "role": "user",
               "content" : [
                   {"type" : "text",  "text"  : instruction},
                   {"type" : "text",  "text"  : sample["question"]},
                   {"type" : "image", "image" : extract_image(sample["image"])},
-                  #TODO: METTERE DESCRIZIONE QUADRO
-                  {"type" : "text",  "text"  : sample["external_knowledge"]} ]
+                  {"type" : "text",  "text"  : description} ]
               }
         ]
         if not is_test:
