@@ -2,6 +2,7 @@ import os
 import json
 import yaml
 import sys
+import data_preprocessing as dp
 
 
 def load_config(config_file="config.yaml"):
