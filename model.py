@@ -1,5 +1,5 @@
 from unsloth import FastVisionModel # FastLanguageModel for LLMs
-import data_preprocessing
+import data_utils  # Importa dal nuovo file combinato invece di data_preprocessing
 from transformers import AutoTokenizer, TextStreamer
 
 
@@ -61,7 +61,7 @@ def make_inference(model, tokenizer, image_path, question, instruction, max_leng
     """
     FastVisionModel.for_inference(model)  # Enable for inference!
 
-    image = data_preprocessing.extract_image(image_path, base_path=base_path)
+    image = data_utils.extract_image(image_path, base_path=base_path)
 
     messages = [
         {"role": "user", "content": [

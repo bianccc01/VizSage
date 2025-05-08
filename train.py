@@ -5,20 +5,19 @@ from unsloth import FastVisionModel, is_bf16_supported
 from unsloth.trainer import UnslothVisionDataCollator
 from trl import SFTTrainer, SFTConfig
 import model as m
-import data_preprocessing as dp
+import data_utils
+import config_utils
 from dotenv import load_dotenv
 import wandb
 import socket
 from datetime import datetime
 import random
 from datasets import Dataset, load_from_disk
-import utils
 import pandas as pd
 
 
 # Load environment variables from .env file
 load_dotenv()
-
 
 
 def setup_wandb(config):
@@ -300,6 +299,7 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
 
     return trainer
 
+
 def get_model_from_config(config):
     """Get model and tokenizer using parameters from config"""
     model, tokenizer = m.get_model(
@@ -325,7 +325,7 @@ if __name__ == "__main__":
     config_file = "config.yaml"
 
     # Load configuration
-    config = utils.load_config(config_file)
+    config = config_utils.load_config(config_file)  # Aggiornato per usare config_utils invece di utils
 
     # Setup wandb logging
     wandb_run = setup_wandb(config)
@@ -344,12 +344,20 @@ if __name__ == "__main__":
     use_streaming = config.get("use_streaming", False)
 
     # Load dataset
-    train_dataset, val_dataset, test_dataset, len_train_dataset = dp.get_dataset(
-        base_path=config.get("base_path", "data"),
-        dataset=config.get("dataset", "AQUA"),
-        external_knowledge=config.get("external_knowledge", False),
-        use_streaming=use_streaming
-    )
+    if use_streaming:
+        train_dataset, val_dataset, test_dataset, len_train_dataset, len_test_dataset = data_utils.get_dataset(
+            base_path=config.get("base_path", "data"),
+            dataset=config.get("dataset", "AQUA"),
+            external_knowledge=config.get("external_knowledge", False),
+            use_streaming=use_streaming
+        )
+    else:
+        train_dataset, val_dataset, test_dataset, len_train_dataset = data_utils.get_dataset(
+            base_path=config.get("base_path", "data"),
+            dataset=config.get("dataset", "AQUA"),
+            external_knowledge=config.get("external_knowledge", False),
+            use_streaming=use_streaming
+        )
 
     # Seed random for reproducibility or different results each run
     import time
@@ -360,12 +368,11 @@ if __name__ == "__main__":
     if use_streaming:
         print("Using streaming mode for dataset processing")
 
-
         if (config.get("external_knowledge", False)):
             # Load the external knowledge dataset
             semart_dataset = pd.read_csv(config.get("external_knowledge_path", "data/semart.csv"), sep= '\t', encoding='latin1',header=0)
             # Prepare the streaming dataset
-            stream_ready_dataset = utils.prepare_streaming_dataset(
+            stream_ready_dataset = data_utils.prepare_streaming_dataset(  # Aggiornato per usare data_utils invece di utils
                 streaming_dataset=train_dataset,
                 config=config,
                 semart_dataset=semart_dataset,
@@ -373,7 +380,7 @@ if __name__ == "__main__":
             )
         else:
             # Prepare the streaming dataset without external knowledge
-            stream_ready_dataset = utils.prepare_streaming_dataset(
+            stream_ready_dataset = data_utils.prepare_streaming_dataset(  # Aggiornato per usare data_utils invece di utils
                 streaming_dataset=train_dataset,
                 config=config,
                 base_path=config.get("base_path", "data")
@@ -415,7 +422,7 @@ if __name__ == "__main__":
                 # If external knowledge is used, get the description
                 if config.get("external_knowledge", False) and test_sample["need_external_knowledge"]:
                     description = semart_dataset.loc[semart_dataset['image'] == image, 'description'].values[0]
-                else :
+                else:
                     description = None
 
                 print("\n=== PRE-TRAINING INFERENCE ===")
@@ -439,19 +446,18 @@ if __name__ == "__main__":
             print("No test dataset available")
             post_training_test_sample = None
 
-        # Train the model\
+        # Train the model
         print("\n=== STARTING TRAINING ===")
         trainer = train_streaming(model, tokenizer, stream_ready_dataset, config, wandb_run, len_train_dataset)
 
     else:
-
         if config.get("external_knowledge", False):
             # Load the external knowledge dataset
             semart_dataset = pd.read_csv(config.get("external_knowledge_path", "data/semart.csv"), sep= '\t', encoding='latin1',header=0)
             # Convert the dataset to a conversation format
-            train_dataset = [dp.convert_to_conversation(sample, semart_dataset=semart_dataset) for sample in train_dataset]
+            train_dataset = [data_utils.convert_to_conversation(sample, semart_dataset=semart_dataset) for sample in train_dataset]  # Aggiornato per usare data_utils
         else:
-            converted_dataset = [dp.convert_to_conversation(sample) for sample in train_dataset]
+            converted_dataset = [data_utils.convert_to_conversation(sample) for sample in train_dataset]  # Aggiornato per usare data_utils
 
         # Select a random sample for pre-training inference
         if test_dataset:

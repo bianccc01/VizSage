@@ -1,11 +1,11 @@
-from random import sample
-
-from PIL import Image
 import os
 import json
+from PIL import Image
+from datasets import Dataset, IterableDataset
 
 
 def extract_image(image_name, base_path="data"):
+    """Extract and load an image from the specified path."""
     images_path = os.path.join(base_path, "Images")
     image_path = os.path.join(images_path, image_name)
     image = Image.open(image_path).convert("RGB")
@@ -23,12 +23,8 @@ def get_dataset(base_path="data", dataset="AQUA", external_knowledge=False, use_
         use_streaming (bool): Whether to use streaming mode for large datasets
 
     Returns:
-        tuple: (train_dataset, val_dataset, test_dataset)
+        tuple: (train_dataset, val_dataset, test_dataset, train_size[, test_size])
     """
-    import os
-    import json
-    from datasets import Dataset, IterableDataset
-
     dataset_path = os.path.join(base_path, dataset)
     train_data = None
     val_data = None
@@ -79,10 +75,9 @@ def get_dataset(base_path="data", dataset="AQUA", external_knowledge=False, use_
 
             return streaming_dataset
 
-
         print(f"Training dataset size: {len(train_data)}")
         len_train_data = len(train_data)
-        len_test_data = len(test_data)
+        len_test_data = len(test_data) if test_data else 0
         train_dataset = convert_to_streaming_dataset(train_data) if train_data else None
         val_dataset = convert_to_streaming_dataset(val_data) if val_data else None
         test_dataset = convert_to_streaming_dataset(test_data) if test_data else None
@@ -92,6 +87,7 @@ def get_dataset(base_path="data", dataset="AQUA", external_knowledge=False, use_
 
 
 def convert_to_conversation(sample, semart_dataset=None, is_test=False, base_path="data"):
+    """Convert a sample to a conversation format for model training."""
     instruction = "You are an expert art historian. Answer the questions you will be asked about the image."
 
     if sample["need_external_knowledge"]:
@@ -130,3 +126,33 @@ def convert_to_conversation(sample, semart_dataset=None, is_test=False, base_pat
                   }
             )
     return { "messages" : conversation }
+
+
+def prepare_streaming_dataset(streaming_dataset, config, semart_dataset=None, base_path="data"):
+    """
+    Prepare the streaming dataset for training.
+
+    Args:
+        streaming_dataset (IterableDataset): Streaming dataset to be processed
+        config (dict): Configuration dictionary containing training parameters
+        semart_dataset: Dataset containing semantic art descriptions
+        base_path (str): Base path for dataset files
+
+    Returns:
+        Dataset: Processed dataset ready for training
+    """
+    if streaming_dataset is None:
+        return None
+
+    # Apply limit to the dataset if specified
+    buffer_size = config.get("stream_buffer_size", 1000)
+    dataset = streaming_dataset.shuffle(buffer_size=buffer_size)
+
+    # Convert every example to a conversation format
+    def convert_to_conversation_streaming(example):
+        return convert_to_conversation(example, semart_dataset=semart_dataset, base_path=base_path)
+
+    # Apply the conversion function to the streaming dataset
+    processed_dataset = dataset.map(convert_to_conversation_streaming)
+
+    return processed_dataset
