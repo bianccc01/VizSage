@@ -1,10 +1,7 @@
 import model as model_utils
-import config
 import os
 import sys
 import yaml
-from transformers import FastVisionModel
-from transformers import TextStreamer
 import data_preprocessing as dp
 from tqdm import tqdm
 import torch
@@ -14,7 +11,10 @@ import utils
 
 if __name__ == "__main__":
     # Check if a config file was provided as an argument
-    config_file = "config.yaml"
+    if len(sys.argv) > 1:
+        config_file = sys.argv[1]
+    else:
+        config_file = "config.yaml"
 
     # Load configuration
     config = utils.load_config(config_file)
@@ -34,8 +34,8 @@ if __name__ == "__main__":
     # Load the test dataset
     use_streaming = config.get("use_streaming", True)
 
-    train_dataset, val_dataset, test_dataset = dp.get_dataset(
-        base_path="data",
+    train_dataset, val_dataset, test_dataset, len_train_data, len_test_data = dp.get_dataset(
+        base_path=config.get("base_path", "data"),
         dataset=config.get("dataset", "AQUA"),
         external_knowledge=config.get("external_knowledge", False),
         use_streaming=use_streaming
@@ -50,12 +50,12 @@ if __name__ == "__main__":
 
     # create a json with image_path, question, response for each sample of test_dataset
     output_json = []
-    with tqdm (total=len(test_dataset), desc="Processing samples") as pbar:
+    with tqdm (total=len_test_data, desc="Processing samples") as pbar:
         for sample in test_dataset:
             image_path = sample.get("image")
             question = sample.get("question")
             ground_truth = sample.get("answer")
-            description = semart_dataset.loc[semart_dataset['image'] == image_path, 'description'].values[0] if config.get("external_knowledge", False) else None
+            description = semart_dataset.loc[semart_dataset['image_file'] == image_path, 'description'].values[0] if config.get("external_knowledge", False) and sample.get("need_external_knowledge") else None
 
             instruction = config.get("instruction")
 
@@ -67,6 +67,7 @@ if __name__ == "__main__":
                 question = question,
                 instruction = instruction,
                 description = description,
+                base_path=config.get("base_path", "data")
             )
 
             # Append to output json

@@ -345,7 +345,7 @@ if __name__ == "__main__":
 
     # Load dataset
     train_dataset, val_dataset, test_dataset, len_train_dataset = dp.get_dataset(
-        base_path="data",
+        base_path=config.get("base_path", "data"),
         dataset=config.get("dataset", "AQUA"),
         external_knowledge=config.get("external_knowledge", False),
         use_streaming=use_streaming
@@ -368,13 +368,15 @@ if __name__ == "__main__":
             stream_ready_dataset = utils.prepare_streaming_dataset(
                 streaming_dataset=train_dataset,
                 config=config,
-                semart_dataset=semart_dataset
+                semart_dataset=semart_dataset,
+                base_path=config.get("base_path", "data")
             )
         else:
             # Prepare the streaming dataset without external knowledge
             stream_ready_dataset = utils.prepare_streaming_dataset(
                 streaming_dataset=train_dataset,
-                config=config
+                config=config,
+                base_path=config.get("base_path", "data")
             )
 
         # For the inference example - Select a random test sample
@@ -422,7 +424,7 @@ if __name__ == "__main__":
                 print(f"Ground truth answer: {ground_truth}")
                 print("Model prediction:")
                 pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image_path=image, question=question,
-                                                       instruction=instruction, description=description)
+                                                       instruction=instruction, description=description, base_path=config.get("base_path", "data"))
 
                 # Save the test sample for post-training inference
                 post_training_test_sample = {
@@ -467,7 +469,7 @@ if __name__ == "__main__":
             print(f"Ground truth answer: {ground_truth}")
             print("Model prediction:")
             pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image_path=image, question=question,
-                                                   instruction=instruction)
+                                                   instruction=instruction, base_path=config.get("base_path", "data"))
 
             # Save the test sample for post-training inference
             post_training_test_sample = sample
@@ -491,7 +493,8 @@ if __name__ == "__main__":
             tokenizer=tokenizer,
             image_path=post_training_test_sample['image'],
             question=post_training_test_sample['question'],
-            instruction=instruction
+            instruction=instruction,
+            base_path=config.get("base_path", "data")
         )
 
         # Compare the results

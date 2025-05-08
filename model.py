@@ -55,35 +55,30 @@ def get_model(model_name = "unsloth/Llama-3.2-11B-Vision-Instruct", load_in_4bit
 
 def make_inference(model, tokenizer, image_path, question, instruction, max_length=512,
                    temperature=0.1, top_p=0.95, top_k=50, num_beams=1,
-                   do_sample=True, return_dict=True, description=None):
+                   do_sample=True, return_dict=True, description=None, base_path="data"):
     """
     Make an inference with the model and tokenizer.
     """
     FastVisionModel.for_inference(model)  # Enable for inference!
 
-    image = data_preprocessing.extract_image(image_path)
+    image = data_preprocessing.extract_image(image_path, base_path=base_path)
 
     messages = [
         {"role": "user", "content": [
-            {"type": "image"},
             {"type": "text", "text": instruction},
-            {"type": "text", "text": question},
-            {"type": "text", "text": description if description is not None else ""}
+            {"type": "image", "image": image},
+            {"type": "text", "text": description if description is not None else ""},
+            {"type": "text", "text": question}
         ]}
     ]
 
     input_text = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
-    inputs = tokenizer(
-        image,
-        input_text,
-        add_special_tokens=False,
-        return_tensors="pt",
-    ).to("cuda")
+    inputs = tokenizer(input_text, add_special_tokens=False, return_tensors="pt").to("cuda")
 
     # Generate without streaming
     outputs = model.generate(
         **inputs,
-        max_length=max_length,
+        max_new_tokens=128,
         temperature=temperature,
         top_p=top_p,
         top_k=top_k,
@@ -100,8 +95,6 @@ def make_inference(model, tokenizer, image_path, question, instruction, max_leng
         assistant_response = generated_text.split("assistant", 1)[1].strip()
     else:
         assistant_response = generated_text
-
-    print(assistant_response)
 
     return assistant_response
 

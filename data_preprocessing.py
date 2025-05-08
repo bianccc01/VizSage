@@ -81,15 +81,17 @@ def get_dataset(base_path="data", dataset="AQUA", external_knowledge=False, use_
 
 
         print(f"Training dataset size: {len(train_data)}")
+        len_train_data = len(train_data)
+        len_test_data = len(test_data)
         train_dataset = convert_to_streaming_dataset(train_data) if train_data else None
         val_dataset = convert_to_streaming_dataset(val_data) if val_data else None
         test_dataset = convert_to_streaming_dataset(test_data) if test_data else None
 
         print(f"Successfully created streaming datasets")
-        return train_dataset, val_dataset, test_dataset, len(train_data)
+        return train_dataset, val_dataset, test_dataset, len_train_data, len_test_data
 
 
-def convert_to_conversation(sample, semart_dataset= None, is_test=False):
+def convert_to_conversation(sample, semart_dataset=None, is_test=False, base_path="data"):
     instruction = "You are an expert art historian. Answer the questions you will be asked about the image."
 
     if sample["need_external_knowledge"]:
@@ -98,9 +100,10 @@ def convert_to_conversation(sample, semart_dataset= None, is_test=False):
             { "role": "user",
               "content" : [
                   {"type" : "text",  "text"  : instruction},
-                  {"type" : "text",  "text"  : sample["question"]},
-                  {"type" : "image", "image" : extract_image(sample["image"])},
-                  {"type" : "text",  "text"  : description} ]
+                  {"type" : "image", "image" : extract_image(sample["image"], base_path=base_path)},
+                  {"type" : "text",  "text"  : description},
+                  {"type" : "text",  "text"  : sample["question"]}
+              ]
               }
         ]
         if not is_test:
@@ -108,15 +111,15 @@ def convert_to_conversation(sample, semart_dataset= None, is_test=False):
                 { "role" : "assistant",
                   "content" : [
                       {"type" : "text",  "text"  : sample["answer"]} ]
-                }
+                  }
             )
     else:
         conversation = [
             { "role": "user",
               "content" : [
                   {"type" : "text",  "text"  : instruction},
-                  {"type" : "text",  "text"  : sample["question"]},
-                  {"type" : "image", "image" : extract_image(sample["image"])} ]
+                  {"type" : "image", "image" : extract_image(sample["image"], base_path=base_path)},
+                  {"type" : "text",  "text"  : sample["question"]} ]
               }
         ]
         if not is_test:
@@ -124,6 +127,6 @@ def convert_to_conversation(sample, semart_dataset= None, is_test=False):
                 { "role" : "assistant",
                   "content" : [
                       {"type" : "text",  "text"  : sample["answer"]} ]
-                }
+                  }
             )
     return { "messages" : conversation }

@@ -40,7 +40,7 @@ use_bf16: true
 
 # Dataset parameters
 dataset: "AQUA"
-base_path: "data"
+base_path: "drive/MyDrive/VisualFineTuning_Dataset"
 external_knowledge: true
 external_knowledge_path: "data/semart.csv"
 num_proc: 4

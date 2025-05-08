@@ -53,17 +53,6 @@ VizSage is a streamlined framework for fine-tuning vision-language models (VLMs)
    - Download the image dataset from the [SemArt website](https://noagarcia.github.io/SemArt/)
    - Place the images in your desired directory (you'll configure this path in the next step)
 
-7. Update the `base_path` in the configuration:
-   - In the `train.py` file, find the line where `dp.get_dataset` is called
-   - Update the `base_path` parameter to point to your data directory, for example:
-     ```python
-     train_dataset, val_dataset, test_dataset = dp.get_dataset(
-         base_path="data",  # Update this path if your data is in a different location
-         dataset=config.get("dataset", "AQUA"),
-         external_knowledge=config.get("external_knowledge", False)
-     )
-     ```
-
 ## 📋 Usage
 
 ### Prepare Your Dataset
