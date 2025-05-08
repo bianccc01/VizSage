@@ -49,9 +49,12 @@ VizSage is a streamlined framework for fine-tuning vision-language models (VLMs)
    - Download the dataset files (train.json, val.json, test.json)
    - Create a directory structure: `data/AQUA/` and place the files there
 
-6. Download the SemArt images:
+6. Download the SemArt dataset:
    - Download the image dataset from the [SemArt website](https://noagarcia.github.io/SemArt/)
+   - Download the SemArt JSON files (train.json, test.json, val.json)
    - Place the images in your desired directory (you'll configure this path in the next step)
+   - Create a single `semart.csv` file that combines all train, test, and val data from SemArt (this file is required for providing descriptions for questions that need external knowledge)
+   - Place the `semart.csv` file in the `data/` directory
 
 ## 📋 Usage
 
@@ -66,6 +69,7 @@ The dataset uses the following structure:
 │   ├── train.json
 │   ├── val.json
 │   └── test.json
+├── semart.csv  # Combined SemArt dataset for external knowledge descriptions
 └── Images/
     ├── 1234_painting.jpg
     ├── 5678_painting.jpg
@@ -86,7 +90,7 @@ Where:
 - `image`: Image filename as in SemArt dataset
 - `question`: Question about the artwork
 - `answer`: Answer to the question
-- `need_external_knowledge`: Whether the question requires external knowledge (`True` for QAs generated from comments and `False` for QAs generated from paintings)
+- `need_external_knowledge`: Whether the question requires external knowledge (`True` for QAs generated from comments and `False` for QAs generated from paintings). When `True`, the system will retrieve additional descriptions from `semart.csv`
 
 ### Configure Training
 
@@ -137,6 +141,7 @@ python train.py custom_config.yaml
 | `model_name` | Model identifier or path | `"unsloth/Llama-3.2-11B-Vision-Instruct"` |
 | `load_in_4bit` | Use 4-bit quantization | `true` |
 | `use_gradient_checkpointing` | Gradient checkpointing strategy | `"unsloth"` |
+| `name_trained_model` | Name for saving the fine-tuned model | `"VizSage_final_model"` |
 | `finetune_vision_layers` | Fine-tune vision encoder | `false` |
 | `finetune_language_layers` | Fine-tune language model | `true` |
 | `finetune_attention_modules` | Fine-tune attention modules | `true` |
@@ -151,6 +156,7 @@ python train.py custom_config.yaml
 | `lora_dropout` | LoRA dropout rate | `0` |
 | `lora_bias` | LoRA bias type | `"none"` |
 | `use_rslora` | Use rank-stabilized LoRA | `false` |
+| `random_state` | Random seed for LoRA initialization | `3407` |
 
 ### Training Parameters
 
@@ -161,15 +167,32 @@ python train.py custom_config.yaml
 | `epochs` | Number of training epochs | `1` |
 | `lr` | Learning rate | `0.0002` |
 | `warmup_steps` | Learning rate warmup steps | `5` |
+| `weight_decay` | Weight decay for AdamW optimizer | `0.01` |
+| `logging_steps` | Steps between logging updates | `1` |
 | `optim` | Optimizer | `"adamw_8bit"` |
 | `scheduler` | Learning rate scheduler | `"linear"` |
+| `seed` | Random seed for training | `3407` |
+
+### Inference Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `instruction` | System prompt for model inference | `"You are an expert art historian..."` |
+
+### Hardware Options
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `use_bf16` | Use bfloat16 precision | `true` |
 
 ### Dataset and Output
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `dataset` | Dataset name | `"AQUA"` |
-| `external_knowledge` | Include QAs requiring external knowledge | `false` |
+| `base_path` | Base directory for data | `"data"` |
+| `external_knowledge` | Include QAs requiring external knowledge | `true` |
+| `external_knowledge_path` | Path to external knowledge file | `"data/semart.csv"` (combined SemArt dataset for retrieving descriptions of artworks) |
 | `num_proc` | Number of processes for loading | `4` |
 | `max_seq_length` | Maximum sequence length | `2048` |
 | `output_dir` | Directory to save models | `"outputs"` |
@@ -180,7 +203,17 @@ python train.py custom_config.yaml
 |-----------|-------------|---------|
 | `use_wandb` | Enable W&B logging | `true` |
 | `wandb_project` | W&B project name | `"VizSage"` |
-| `wandb_tags` | Tags for the run | `[]` |
+| `wandb_tags` | Tags for the run | `["llama3", "vision", "finetune"]` |
+
+### Streaming Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `use_streaming` | Enable dataset streaming | `true` |
+| `stream_buffer_size` | Buffer size for streaming | `1000` |
+| `save_steps` | Number of steps between model saves | `100` |
+| `n_saves` | Maximum number of checkpoint saves to keep | `5` |
+| `test_samples_to_check` | Number of test samples to check during validation | `1` |
 
 ## 📊 Experiment Tracking
 
@@ -213,7 +246,7 @@ vizsage/
 - **Slow training**: Increase `batch_size` if memory allows, or try a smaller model
 - **Poor results**: Adjust `lr`, `lora_r`, or increase `epochs`
 - **API key errors**: Ensure your Hugging Face API key is correctly set in the `.env` file
-- **Dataset path errors**: Check that the `base_path` in `train_with_config.py` points to your data directory
+- **Dataset path errors**: Check that the `base_path` in `config.yaml` points to your data directory
 
 ## 📜 License
 
