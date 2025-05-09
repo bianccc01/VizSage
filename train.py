@@ -1,6 +1,7 @@
 import yaml
 import sys
 import os
+import re
 from unsloth import FastVisionModel, is_bf16_supported
 from unsloth.trainer import UnslothVisionDataCollator
 from trl import SFTTrainer, SFTConfig
@@ -14,7 +15,9 @@ from datetime import datetime
 import random
 from datasets import Dataset, load_from_disk
 import pandas as pd
-
+import numpy as np
+import torch
+import evaluate_metrics
 
 # Load environment variables from .env file
 load_dotenv()
@@ -66,6 +69,9 @@ def setup_wandb(config):
             "dataset": config.get("dataset"),
             "max_seq_length": config.get("max_seq_length"),
             "external_knowledge": config.get("external_knowledge", False),
+            "use_validation": config.get("use_validation", True),
+            "evaluation_metrics": config.get("evaluation_metrics", ["bleu", "rouge"]),
+            "best_model_metric": config.get("best_model_metric", "rougeL_fmeasure"),
         },
         tags=config.get("wandb_tags", []),
         # Disable model saving to wandb
@@ -81,8 +87,8 @@ def setup_wandb(config):
     return wandb_run
 
 
-def train(model, tokenizer, converted_dataset, config, wandb_run=None):
-    """Train the model with parameters from config"""
+def train(model, tokenizer, converted_dataset, config, wandb_run=None, validation_dataset=None):
+    """Train the model with parameters from config and optional validation dataset"""
 
     # Enable model for training
     FastVisionModel.for_training(model)
@@ -98,14 +104,40 @@ def train(model, tokenizer, converted_dataset, config, wandb_run=None):
     output_dir = config.get("output_dir", "outputs")
     os.makedirs(output_dir, exist_ok=True)
 
+    # Determine if we should use validation set
+    evaluation_strategy = "no"
+    if validation_dataset is not None and len(validation_dataset) > 0:
+        evaluation_strategy = "epoch"
+        print(f"Using validation dataset with {len(validation_dataset)} samples")
+        # Log to wandb if enabled
+        if wandb_run:
+            wandb_run.config.update({"validation_samples": len(validation_dataset)})
+    else:
+        print("No validation dataset provided, skipping evaluation")
+        validation_dataset = None
+
+    # Setup metrics computation function
+    metric_choices = config.get("evaluation_metrics", ["bleu", "rouge", "exact_match"])
+    print(f"Using evaluation metrics: {metric_choices}")
+    compute_metrics_fn = evaluate_metrics.compute_metrics_factory(tokenizer, metric_choices)
+
+    # Get the best model metric configuration
+    best_model_metric = config.get("best_model_metric", "rougeL_fmeasure")
+    greater_is_better = config.get("greater_is_better", True)
+    print(f"Using {best_model_metric} as the metric for best model selection (greater_is_better={greater_is_better})")
+
     # Configure trainer
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         data_collator=UnslothVisionDataCollator(model, tokenizer),
         train_dataset=converted_dataset,
+        eval_dataset=validation_dataset,  # Add validation dataset here
+        compute_metrics=compute_metrics_fn if validation_dataset is not None else None,  # Add metrics function
         args=SFTConfig(
             per_device_train_batch_size=config.get("batch_size", 2),
+            per_device_eval_batch_size=config.get("eval_batch_size", config.get("batch_size", 2)),
+            # Batch size for validation
             gradient_accumulation_steps=config.get("grad_accum", 4),
             warmup_steps=config.get("warmup_steps", 5),
             num_train_epochs=config.get("epochs", 1),
@@ -121,11 +153,22 @@ def train(model, tokenizer, converted_dataset, config, wandb_run=None):
             report_to=report_to,  # Use wandb if configured
             run_name=wandb_run.name if wandb_run else None,
 
+            # Evaluation strategy based on validation dataset availability
+            evaluation_strategy=evaluation_strategy,
+            eval_steps=config.get("eval_steps", None),  # Evaluate every n steps if specified
+
+            # Save strategy
+            save_strategy="epoch",  # Save at the end of each epoch
+            save_total_limit=config.get("save_total_limit", 3),  # Keep only the 3 best models
+            load_best_model_at_end=validation_dataset is not None,
+            # Load the best model at the end if we have validation data
+            metric_for_best_model=best_model_metric if validation_dataset is not None else None,
+            greater_is_better=greater_is_better,  # If True, higher metric is better
+
             # Disable saving model weights to wandb
             hub_model_id=None,
             hub_strategy="end",
             push_to_hub=False,
-            save_strategy="epoch",  # Only save locally at end of epoch
 
             # Required parameters for vision finetuning
             remove_unused_columns=False,
@@ -150,11 +193,27 @@ def train(model, tokenizer, converted_dataset, config, wandb_run=None):
 
     # Log model metadata to wandb if enabled
     if wandb_run:
+        # Get validation metrics if available
+        eval_metrics = {}
+        if validation_dataset is not None and hasattr(trainer, "state"):
+            if hasattr(trainer.state, "best_metric") and trainer.state.best_metric is not None:
+                eval_metrics["best_" + best_model_metric] = trainer.state.best_metric
+
+            # Log all training history metrics
+            if hasattr(trainer.state, "log_history") and trainer.state.log_history:
+                for log_entry in trainer.state.log_history:
+                    if "eval_" in str(log_entry):
+                        for key, value in log_entry.items():
+                            if key.startswith("eval_"):
+                                eval_metrics[key] = value
+
         wandb_run.summary.update({
             "train_samples": len(converted_dataset),
+            "validation_samples": len(validation_dataset) if validation_dataset is not None else 0,
             "final_model_path": final_model_path,
             "training_completed": True,
             "completion_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            **eval_metrics  # Add all evaluation metrics to summary
         })
 
         # Create a text summary instead of saving the model card as an artifact
@@ -171,10 +230,16 @@ def train(model, tokenizer, converted_dataset, config, wandb_run=None):
         - Learning rate: {config.get('lr')}
         - Epochs: {config.get('epochs')}
         - LoRA rank: {config.get('lora_r')}
-
-        ## Local Path
-        - Saved to: {final_model_path}
+        - Validation: {"Yes" if validation_dataset is not None else "No"}
         """
+
+        # Add evaluation metrics to model card if available
+        if eval_metrics:
+            model_card_text += "\n\n## Evaluation Metrics\n"
+            for key, value in eval_metrics.items():
+                model_card_text += f"- {key}: {value:.4f}\n"
+
+        model_card_text += f"\n## Local Path\n- Saved to: {final_model_path}\n"
 
         # Log the text summary directly to wandb
         wandb.log({"model_card": wandb.Html(model_card_text.replace('\n', '<br>'))})
@@ -186,8 +251,9 @@ def train(model, tokenizer, converted_dataset, config, wandb_run=None):
     return trainer
 
 
-def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None, len_train_dataset=None):
-    """Train the model with streaming dataset"""
+def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None, len_train_dataset=None,
+                    validation_dataset=None):
+    """Train the model with streaming dataset and optional validation dataset"""
 
     # Enable model for training
     FastVisionModel.for_training(model)
@@ -208,20 +274,48 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
     output_dir = config.get("output_dir", "outputs")
     os.makedirs(output_dir, exist_ok=True)
 
-    # Calulate max steps based on dataset size
+    # Calculate max steps based on dataset size
     max_steps = int(len_train_dataset / (config.get("batch_size", 2) * config.get("grad_accum", 4)))
 
     # how many times to save the model
     n_saves = config.get("n_saves", 5)
     save_steps = max(1, max_steps // n_saves)
 
+    # Determine validation settings
+    evaluation_strategy = "no"
+    if validation_dataset is not None and len(validation_dataset) > 0:
+        evaluation_strategy = "steps"
+        eval_steps = max(1, max_steps // config.get("n_evals", 5))  # Evaluate 5 times during training by default
+        print(f"Using validation dataset with {len(validation_dataset)} samples, evaluating every {eval_steps} steps")
+        # Log to wandb if enabled
+        if wandb_run:
+            wandb_run.config.update({"validation_samples": len(validation_dataset), "eval_steps": eval_steps})
+    else:
+        print("No validation dataset provided, skipping evaluation")
+        validation_dataset = None
+        eval_steps = None
+
+    # Setup metrics computation function
+    metric_choices = config.get("evaluation_metrics", ["bleu", "rouge", "exact_match"])
+    print(f"Using evaluation metrics: {metric_choices}")
+    compute_metrics_fn = evaluate_metrics.compute_metrics_factory(tokenizer, metric_choices)
+
+    # Get the best model metric configuration
+    best_model_metric = config.get("best_model_metric", "rougeL_fmeasure")
+    greater_is_better = config.get("greater_is_better", True)
+    print(f"Using {best_model_metric} as the metric for best model selection (greater_is_better={greater_is_better})")
+
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         data_collator=UnslothVisionDataCollator(model, tokenizer),
         train_dataset=streaming_dataset,
+        eval_dataset=validation_dataset,  # Add validation dataset
+        compute_metrics=compute_metrics_fn if validation_dataset is not None else None,  # Add metrics function
         args=SFTConfig(
             per_device_train_batch_size=config.get("batch_size", 2),
+            per_device_eval_batch_size=config.get("eval_batch_size", config.get("batch_size", 2)),
+            # Batch size for validation
             gradient_accumulation_steps=config.get("grad_accum", 4),
             warmup_steps=config.get("warmup_steps", 5),
             max_steps=max_steps,
@@ -237,8 +331,21 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
             output_dir=output_dir,
             report_to=report_to,
             run_name=wandb_run.name if wandb_run else None,
+
+            # Evaluation strategy
+            evaluation_strategy=evaluation_strategy,
+            eval_steps=eval_steps,
+
+            # Save strategy
             save_strategy="steps",
             save_steps=save_steps,
+            save_total_limit=config.get("save_total_limit", 3),  # Keep only the 3 best models
+            load_best_model_at_end=validation_dataset is not None,
+            # Load the best model at the end if we have validation data
+            metric_for_best_model=best_model_metric if validation_dataset is not None else None,
+            # Metric to use for best model selection
+            greater_is_better=greater_is_better,  # If True, higher metric is better
+
             remove_unused_columns=False,
             dataset_text_field="",
             dataset_kwargs={"skip_prepare_dataset": True},
@@ -263,11 +370,27 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
 
     # Log model metadata to wandb if enabled
     if wandb_run:
-        # Adatta il logging wandb per lo streaming
+        # Get validation metrics if available
+        eval_metrics = {}
+        if validation_dataset is not None and hasattr(trainer, "state"):
+            if hasattr(trainer.state, "best_metric") and trainer.state.best_metric is not None:
+                eval_metrics["best_" + best_model_metric] = trainer.state.best_metric
+
+            # Log all training history metrics
+            if hasattr(trainer.state, "log_history") and trainer.state.log_history:
+                for log_entry in trainer.state.log_history:
+                    if "eval_" in str(log_entry):
+                        for key, value in log_entry.items():
+                            if key.startswith("eval_"):
+                                eval_metrics[key] = value
+
+        # Add summary information to wandb
         wandb_run.summary.update({
             "training_completed": True,
             "completion_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "final_model_path": final_model_path,
+            "validation_samples": len(validation_dataset) if validation_dataset is not None else 0,
+            **eval_metrics  # Aggiungi tutte le metriche di valutazione al riepilogo
         })
 
         # Create a text summary instead of saving the model card as an artifact
@@ -285,10 +408,16 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
         - Max steps: {max_steps}
         - LoRA rank: {config.get('lora_r')}
         - Training mode: Streaming
-
-        ## Local Path
-        - Saved to: {final_model_path}
+        - Validation: {"Yes" if validation_dataset is not None else "No"}
         """
+
+        # Add evaluation metrics to model card if available
+        if eval_metrics:
+            model_card_text += "\n\n## Evaluation Metrics\n"
+            for key, value in eval_metrics.items():
+                model_card_text += f"- {key}: {value:.4f}\n"
+
+        model_card_text += f"\n## Local Path\n- Saved to: {final_model_path}\n"
 
         # Log the text summary directly to wandb
         wandb.log({"model_card": wandb.Html(model_card_text.replace('\n', '<br>'))})
@@ -323,9 +452,11 @@ def get_model_from_config(config):
 if __name__ == "__main__":
     # Check if a config file was provided as an argument
     config_file = "config.yaml"
+    if len(sys.argv) > 1:
+        config_file = sys.argv[1]
 
     # Load configuration
-    config = config_utils.load_config(config_file)  # Aggiornato per usare config_utils invece di utils
+    config = config_utils.load_config(config_file)
 
     # Setup wandb logging
     wandb_run = setup_wandb(config)
@@ -342,6 +473,8 @@ if __name__ == "__main__":
 
     # Check use streaming option
     use_streaming = config.get("use_streaming", False)
+    # Check if validation should be used
+    use_validation = config.get("use_validation", True)
 
     # Load dataset
     if use_streaming:
@@ -364,23 +497,70 @@ if __name__ == "__main__":
 
     random.seed(int(time.time()))  # Comment this line for reproducible results
 
+    # Load external knowledge dataset if needed
+    semart_dataset = None
+    if config.get("external_knowledge", False):
+        semart_dataset = pd.read_csv(config.get("external_knowledge_path", "data/semart.csv"), sep='\t',
+                                     encoding='latin1', header=0)
+        print(f"Loaded SemArt dataset with {len(semart_dataset)} entries")
+
+    # Prepare validation dataset if available and requested
+    val_ready_dataset = None
+    if val_dataset and use_validation:
+        print(f"Preparing validation dataset...")
+        if use_streaming:
+            # For streaming validation, process it first to convert to a standard dataset
+            val_samples = []
+            # Collect a limited number of validation samples to avoid memory issues
+            max_val_samples = config.get("max_val_samples", 500)  # Limit the validation set size
+            val_count = 0
+
+            for sample in val_dataset:
+                # Convert sample to conversation format
+                if config.get("external_knowledge", False) and sample.get("need_external_knowledge", False):
+                    converted = data_utils.convert_to_conversation(sample, semart_dataset=semart_dataset,
+                                                                   base_path=config.get("base_path", "data"))
+                else:
+                    converted = data_utils.convert_to_conversation(sample, base_path=config.get("base_path", "data"))
+
+                val_samples.append(converted)
+                val_count += 1
+
+                if val_count >= max_val_samples:
+                    break
+
+            if val_samples:
+                val_ready_dataset = val_samples
+                print(f"Created validation dataset with {len(val_ready_dataset)} samples")
+            else:
+                print("Could not create validation dataset from streaming source")
+        else:
+            # For regular validation dataset, convert all samples
+            if config.get("external_knowledge", False):
+                val_ready_dataset = [data_utils.convert_to_conversation(sample, semart_dataset=semart_dataset,
+                                                                        base_path=config.get("base_path", "data")) for
+                                     sample in val_dataset]
+            else:
+                val_ready_dataset = [
+                    data_utils.convert_to_conversation(sample, base_path=config.get("base_path", "data")) for sample in
+                    val_dataset]
+
+            print(f"Created validation dataset with {len(val_ready_dataset)} samples")
+
     # Different setup for streaming vs non-streaming
     if use_streaming:
         print("Using streaming mode for dataset processing")
 
-        if (config.get("external_knowledge", False)):
-            # Load the external knowledge dataset
-            semart_dataset = pd.read_csv(config.get("external_knowledge_path", "data/semart.csv"), sep= '\t', encoding='latin1',header=0)
-            # Prepare the streaming dataset
-            stream_ready_dataset = data_utils.prepare_streaming_dataset(  # Aggiornato per usare data_utils invece di utils
+        # Prepare the streaming dataset
+        if config.get("external_knowledge", False):
+            stream_ready_dataset = data_utils.prepare_streaming_dataset(
                 streaming_dataset=train_dataset,
                 config=config,
                 semart_dataset=semart_dataset,
                 base_path=config.get("base_path", "data")
             )
         else:
-            # Prepare the streaming dataset without external knowledge
-            stream_ready_dataset = data_utils.prepare_streaming_dataset(  # Aggiornato per usare data_utils invece di utils
+            stream_ready_dataset = data_utils.prepare_streaming_dataset(
                 streaming_dataset=train_dataset,
                 config=config,
                 base_path=config.get("base_path", "data")
@@ -420,7 +600,7 @@ if __name__ == "__main__":
                 question = test_sample["question"]
                 ground_truth = test_sample["answer"]
                 # If external knowledge is used, get the description
-                if config.get("external_knowledge", False) and test_sample["need_external_knowledge"]:
+                if config.get("external_knowledge", False) and test_sample.get("need_external_knowledge", False):
                     description = semart_dataset.loc[semart_dataset['image'] == image, 'description'].values[0]
                 else:
                     description = None
@@ -430,8 +610,10 @@ if __name__ == "__main__":
                 print(f"Image path: {image}")
                 print(f"Ground truth answer: {ground_truth}")
                 print("Model prediction:")
-                pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image_path=image, question=question,
-                                                       instruction=instruction, description=description, base_path=config.get("base_path", "data"))
+                pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image_path=image,
+                                                       question=question,
+                                                       instruction=instruction, description=description,
+                                                       base_path=config.get("base_path", "data"))
 
                 # Save the test sample for post-training inference
                 post_training_test_sample = {
@@ -446,18 +628,22 @@ if __name__ == "__main__":
             print("No test dataset available")
             post_training_test_sample = None
 
-        # Train the model
+        # Train the model with validation
         print("\n=== STARTING TRAINING ===")
-        trainer = train_streaming(model, tokenizer, stream_ready_dataset, config, wandb_run, len_train_dataset)
+        trainer = train_streaming(model, tokenizer, stream_ready_dataset, config, wandb_run, len_train_dataset,
+                                  validation_dataset=val_ready_dataset)
 
     else:
+        # Prepare training dataset
         if config.get("external_knowledge", False):
-            # Load the external knowledge dataset
-            semart_dataset = pd.read_csv(config.get("external_knowledge_path", "data/semart.csv"), sep= '\t', encoding='latin1',header=0)
-            # Convert the dataset to a conversation format
-            train_dataset = [data_utils.convert_to_conversation(sample, semart_dataset=semart_dataset) for sample in train_dataset]  # Aggiornato per usare data_utils
+            # Convert the dataset to a conversation format with external knowledge
+            converted_dataset = [data_utils.convert_to_conversation(sample, semart_dataset=semart_dataset,
+                                                                    base_path=config.get("base_path", "data")) for
+                                 sample in train_dataset]
         else:
-            converted_dataset = [data_utils.convert_to_conversation(sample) for sample in train_dataset]  # Aggiornato per usare data_utils
+            # Convert the dataset to a conversation format without external knowledge
+            converted_dataset = [data_utils.convert_to_conversation(sample, base_path=config.get("base_path", "data"))
+                                 for sample in train_dataset]
 
         # Select a random sample for pre-training inference
         if test_dataset:
@@ -474,7 +660,8 @@ if __name__ == "__main__":
             print(f"Image path: {image}")
             print(f"Ground truth answer: {ground_truth}")
             print("Model prediction:")
-            pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image_path=image, question=question,
+            pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image_path=image,
+                                                   question=question,
                                                    instruction=instruction, base_path=config.get("base_path", "data"))
 
             # Save the test sample for post-training inference
@@ -482,9 +669,9 @@ if __name__ == "__main__":
         else:
             post_training_test_sample = None
 
-        # Train the model
+        # Train the model with validation
         print("\n=== STARTING TRAINING ===")
-        trainer = train(model, tokenizer, converted_dataset, config, wandb_run)
+        trainer = train(model, tokenizer, converted_dataset, config, wandb_run, validation_dataset=val_ready_dataset)
 
     print("Training completed successfully!")
 
@@ -509,6 +696,30 @@ if __name__ == "__main__":
         print(f"Pre-training: {pre_training_output}")
         print(f"Post-training: {post_training_output}")
 
+        # Calculate metrics on the test sample
+        try:
+            metric_choices = config.get("evaluation_metrics", ["bleu", "rouge", "exact_match"])
+            ref = [clean_text(post_training_test_sample['answer'])]
+            pred = [clean_text(post_training_output)]
+
+            print("\n=== TEST SAMPLE METRICS ===")
+            if "bleu" in metric_choices:
+                bleu_scores = evaluate_metrics.compute_bleu(ref, pred)
+                for key, value in bleu_scores.items():
+                    print(f"{key}: {value:.4f}")
+
+            if "rouge" in metric_choices:
+                rouge_scores = evaluate_metrics.compute_rouge(ref, pred)
+                for key, value in rouge_scores.items():
+                    print(f"{key}: {value:.4f}")
+
+            if "exact_match" in metric_choices:
+                exact_match = evaluate_metrics.compute_exact_match(ref, pred)
+                print(f"exact_match: {exact_match['exact_match']:.4f}")
+
+        except Exception as e:
+            print(f"Error calculating metrics: {e}")
+
     # Save the model if configured to do so
     if config.get("save_model", False):
         save_path = config.get("save_path", "models/trained_model")
@@ -522,3 +733,15 @@ if __name__ == "__main__":
         wandb_run.finish()
 
     print("Training script completed successfully!")
+
+
+# Helper function to clean text for evaluation metrics
+def clean_text(text):
+    """Clean the text for evaluation metrics calculation."""
+    if text is None:
+        return ""
+    # Remove extra whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    # Convert to lowercase
+    text = text.lower()
+    return text

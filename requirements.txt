@@ -1,3 +1,4 @@
+# Dependencies for the project
 unsloth
 bitsandbytes
 accelerate
@@ -18,3 +19,19 @@ python-dotenv
 wandb
 pyyaml
 tqdm
+
+# Dependencies for evaluation
+nltk>=3.6.0
+rouge-score>=0.1.2
+scikit-learn>=1.0.0
+regex>=2022.0.0
+transformers>=4.20.0
+
+# Dependencies for evaluation (optional)
+# bert-score>=0.3.11
+
+# Dataviz
+matplotlib
+
+# Utility for data processing
+pandas

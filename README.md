@@ -10,6 +10,9 @@ VizSage is a streamlined framework for fine-tuning vision-language models (VLMs)
 - **Memory Optimization**: Process large datasets in manageable chunks
 - **Experiment Tracking**: Optional Weights & Biases integration for tracking experiments
 - **Reproducibility**: Save and reuse configurations for consistent results
+- **Validation Support**: Automatically use validation sets to select the best model
+- **Advanced Metrics**: Comprehensive evaluation with BLEU, ROUGE, and exact match metrics
+- **Detailed Reports**: Organized results with visual charts and summaries
 
 ## 🚀 Getting Started
 
@@ -116,6 +119,15 @@ lr: 0.0002
 # Dataset parameters
 dataset: "AQUA"
 external_knowledge: false  # Set to true to include QAs requiring external knowledge
+
+# Validation settings
+use_validation: true
+evaluation_metrics:
+  - "bleu"
+  - "rouge"
+  - "exact_match"
+best_model_metric: "rougeL_fmeasure"
+greater_is_better: true
 ```
 
 ### Start Training
@@ -131,6 +143,20 @@ Or specify a custom configuration file (Different from `config.yaml`):
 ```bash
 python train.py custom_config.yaml
 ```
+
+### Evaluate your Model
+
+After training, you can evaluate the model on the test set:
+
+```bash
+python test.py
+```
+
+The results will be saved in a dedicated `results` folder with timestamp, including:
+- Detailed predictions
+- Comprehensive metrics
+- Visual charts
+- Summary report
 
 ## 🔧 Configuration Options
 
@@ -172,6 +198,19 @@ python train.py custom_config.yaml
 | `optim` | Optimizer | `"adamw_8bit"` |
 | `scheduler` | Learning rate scheduler | `"linear"` |
 | `seed` | Random seed for training | `3407` |
+
+### Validation and Evaluation Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `use_validation` | Enable validation set during training | `true` |
+| `eval_batch_size` | Batch size for evaluation | `4` |
+| `max_val_samples` | Maximum validation samples to use | `500` |
+| `evaluation_metrics` | Metrics to calculate during evaluation | `["bleu", "rouge", "exact_match"]` |
+| `best_model_metric` | Metric for selecting best model | `"rougeL_fmeasure"` |
+| `greater_is_better` | Whether higher metric is better | `true` |
+| `n_evals` | Number of evaluations during streaming training | `10` |
+| `save_total_limit` | Number of best checkpoints to keep | `3` |
 
 ### Inference Parameters
 
@@ -223,18 +262,44 @@ If you enable Weights & Biases integration, VizSage will log:
 - Training parameters
 - Dataset statistics
 - Training loss and metrics
+- Validation metrics during training
 - Model summary (without uploading model weights)
 
 To view your experiments, visit [wandb.ai](https://wandb.ai).
+
+## 📊 Results Analysis
+
+After running the `test.py` script, a comprehensive results analysis is generated in the `results` folder:
+
+```
+results/
+└── ModelName_DatasetName_20250509_123456/
+    ├── test_output.json        # Detailed predictions for each sample
+    ├── test_metrics.json       # All metrics in JSON format
+    ├── test_metrics.csv        # Metrics in CSV format for easy import 
+    ├── summary.md              # Human-readable summary report
+    ├── test_config.yaml        # Configuration used for testing
+    ├── bleu_scores.png         # Chart of BLEU scores
+    └── rouge_scores.png        # Chart of ROUGE scores
+```
+
+This organized structure makes it easy to:
+- Compare different model versions
+- Track improvements across experiments
+- Share results with collaborators
+- Generate reports for presentations
 
 ## 📁 Project Structure
 
 ```
 vizsage/
 ├── config.yaml           # Main configuration file
-├── train.py  # Training script with config support
+├── train.py              # Training script with config support
+├── test.py               # Evaluation script with metrics
 ├── model.py              # Model definition and initialization
-├── data_preprocessing.py # Dataset loading and processing
+├── data_utils.py         # Dataset loading and processing
+├── config_utils.py       # Configuration utilities
+├── evaluate_metrics.py   # Metrics calculation module
 ├── .env.template         # Template for environment variables
 ├── requirements.txt      # Project dependencies
 └── README.md             # This documentation
@@ -247,6 +312,7 @@ vizsage/
 - **Poor results**: Adjust `lr`, `lora_r`, or increase `epochs`
 - **API key errors**: Ensure your Hugging Face API key is correctly set in the `.env` file
 - **Dataset path errors**: Check that the `base_path` in `config.yaml` points to your data directory
+- **Metrics calculation errors**: Make sure you have installed the required packages with `pip install -r requirements.txt`
 
 ## 📜 License
 
@@ -259,7 +325,8 @@ vizsage/
 - [Unsloth](https://github.com/unslothai/unsloth) for the optimized training code
 - [Hugging Face](https://huggingface.co) for the Transformers library
 - [Weights & Biases](https://wandb.ai) for experiment tracking
+- [NLTK](https://www.nltk.org/) and [ROUGE](https://github.com/google-research/google-research/tree/master/rouge) for evaluation metrics
 
 ## 📧 Contact
 
-For questions or issues, please open an issue on GitHub
+For questions or issues, please open an issue on GitHub or mail me at [gio.biancini@stud.uniroma3.it](mailto:gio.biancini@stud.uniroma3.it)
