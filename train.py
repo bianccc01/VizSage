@@ -265,27 +265,54 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
     # Set wandb logging
     report_to = "wandb" if wandb_run else "none"
 
-    # Set max steps for streaming
-    max_steps = config.get("max_steps", 1000)
-    if max_steps is None or max_steps <= 0:
+    # Set max steps for streaming con correzione dei tipi
+    try:
+        max_steps = int(config.get("max_steps", 1000))
+        if max_steps <= 0:
+            max_steps = 1000
+    except (ValueError, TypeError):
+        print(f"Warning: Invalid max_steps value, using default 1000")
         max_steps = 1000
 
     # Create output directory
     output_dir = config.get("output_dir", "outputs")
     os.makedirs(output_dir, exist_ok=True)
 
-    # Calculate max steps based on dataset size
-    max_steps = int(len_train_dataset / (config.get("batch_size", 2) * config.get("grad_accum", 4)))
+    # Calculate max steps based on dataset size con correzione dei tipi
+    try:
+        batch_size = int(config.get("batch_size", 2))
+        grad_accum = int(config.get("grad_accum", 4))
+        max_steps = int(len_train_dataset / (batch_size * grad_accum))
+        # Assicurati che max_steps sia almeno 1
+        max_steps = max(1, max_steps)
+    except (ValueError, TypeError, ZeroDivisionError):
+        print("Warning: Error calculating max_steps, using default 1000")
+        max_steps = 1000
 
-    # how many times to save the model
-    n_saves = config.get("n_saves", 5)
-    save_steps = max(1, max_steps // n_saves)
+    # how many times to save the model con correzione dei tipi
+    try:
+        n_saves = int(config.get("n_saves", 5))
+        if n_saves <= 0:
+            n_saves = 5
+        save_steps = max(1, max_steps // n_saves)
+    except (ValueError, TypeError, ZeroDivisionError):
+        print("Warning: Error calculating save_steps, using default value")
+        save_steps = max(1, max_steps // 5)
 
     # Determine validation settings
     evaluation_strategy = "no"
+    eval_steps = None
     if validation_dataset is not None and len(validation_dataset) > 0:
         evaluation_strategy = "steps"
-        eval_steps = max(1, max_steps // config.get("n_evals", 5))  # Evaluate 5 times during training by default
+        try:
+            n_evals = int(config.get("n_evals", 5))
+            if n_evals <= 0:
+                n_evals = 5
+            eval_steps = max(1, max_steps // n_evals)
+        except (ValueError, TypeError, ZeroDivisionError):
+            print("Warning: Error calculating eval_steps, using default value")
+            eval_steps = max(1, max_steps // 5)
+
         print(f"Using validation dataset with {len(validation_dataset)} samples, evaluating every {eval_steps} steps")
         # Log to wandb if enabled
         if wandb_run:
@@ -293,7 +320,6 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
     else:
         print("No validation dataset provided, skipping evaluation")
         validation_dataset = None
-        eval_steps = None
 
     # Setup metrics computation function
     metric_choices = config.get("evaluation_metrics", ["bleu", "rouge", "exact_match"])
@@ -302,56 +328,67 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
 
     # Get the best model metric configuration
     best_model_metric = config.get("best_model_metric", "rougeL_fmeasure")
-    greater_is_better = config.get("greater_is_better", True)
+    greater_is_better_value = config.get("greater_is_better", True)
+    # Assicurati che sia un booleano
+    if isinstance(greater_is_better_value, str):
+        greater_is_better = greater_is_better_value.lower() in ('true', 'yes', '1', 't', 'y')
+    else:
+        greater_is_better = bool(greater_is_better_value)
+
     print(f"Using {best_model_metric} as the metric for best model selection (greater_is_better={greater_is_better})")
 
+    # Configura TrainingArguments invece di SFTConfig
+    training_args = TrainingArguments(
+        output_dir=output_dir,
+        per_device_train_batch_size=config.get("batch_size", 2),
+        per_device_eval_batch_size=config.get("eval_batch_size", config.get("batch_size", 2)),
+        gradient_accumulation_steps=config.get("grad_accum", 4),
+        warmup_steps=config.get("warmup_steps", 5),
+        max_steps=max_steps,
+        num_train_epochs=1,
+        learning_rate=float(config.get("lr", 2e-4)),
+        fp16=use_fp16,
+        bf16=use_bf16,
+        logging_steps=config.get("logging_steps", 1),
+        optim=config.get("optim", "adamw_8bit"),
+        weight_decay=float(config.get("weight_decay", 0.01)),
+        lr_scheduler_type=config.get("scheduler", "linear"),
+        seed=config.get("seed", 3407),
+        report_to=report_to,
+        run_name=wandb_run.name if wandb_run else None,
+
+        # Evaluation strategy
+        evaluation_strategy=evaluation_strategy,
+        eval_steps=eval_steps,
+
+        # Save strategy
+        save_strategy="steps",
+        save_steps=save_steps,
+        save_total_limit=config.get("save_total_limit", 3),
+        load_best_model_at_end=validation_dataset is not None,
+        metric_for_best_model=best_model_metric if validation_dataset is not None else None,
+        greater_is_better=greater_is_better,
+
+        remove_unused_columns=False,
+        # Non includere dataset_text_field nei TrainingArguments
+        # dataset_text_field="",
+        # Non includere dataset_kwargs nei TrainingArguments
+        # dataset_kwargs={"skip_prepare_dataset": True},
+        # Rimossa max_seq_length da TrainingArguments poiché non è supportata
+        # max_seq_length=config.get("max_seq_length", 2048),
+    )
+
+    # Configure trainer
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         data_collator=UnslothVisionDataCollator(model, tokenizer),
         train_dataset=streaming_dataset,
-        eval_dataset=validation_dataset,  # Add validation dataset
-        compute_metrics=compute_metrics_fn if validation_dataset is not None else None,  # Add metrics function
-        args=SFTConfig(
-            per_device_train_batch_size=config.get("batch_size", 2),
-            per_device_eval_batch_size=config.get("eval_batch_size", config.get("batch_size", 2)),
-            # Batch size for validation
-            gradient_accumulation_steps=config.get("grad_accum", 4),
-            warmup_steps=config.get("warmup_steps", 5),
-            max_steps=max_steps,
-            num_train_epochs=1,
-            learning_rate=config.get("lr", 2e-4),
-            fp16=use_fp16,
-            bf16=use_bf16,
-            logging_steps=config.get("logging_steps", 1),
-            optim=config.get("optim", "adamw_8bit"),
-            weight_decay=config.get("weight_decay", 0.01),
-            lr_scheduler_type=config.get("scheduler", "linear"),
-            seed=config.get("seed", 3407),
-            output_dir=output_dir,
-            report_to=report_to,
-            run_name=wandb_run.name if wandb_run else None,
-
-            # Evaluation strategy
-            evaluation_strategy=evaluation_strategy,
-            eval_steps=eval_steps,
-
-            # Save strategy
-            save_strategy="steps",
-            save_steps=save_steps,
-            save_total_limit=config.get("save_total_limit", 3),  # Keep only the 3 best models
-            load_best_model_at_end=validation_dataset is not None,
-            # Load the best model at the end if we have validation data
-            metric_for_best_model=best_model_metric if validation_dataset is not None else None,
-            # Metric to use for best model selection
-            greater_is_better=greater_is_better,  # If True, higher metric is better
-
-            remove_unused_columns=False,
-            dataset_text_field="",
-            dataset_kwargs={"skip_prepare_dataset": True},
-            dataset_num_proc=config.get("num_proc", 4),
-            max_seq_length=config.get("max_seq_length", 2048),
-        ),
+        eval_dataset=validation_dataset,
+        compute_metrics=compute_metrics_fn if validation_dataset is not None else None,
+        args=training_args,  # Usa training_args invece di SFTConfig
+        dataset_text_field="",
+        dataset_kwargs={"skip_prepare_dataset": True},
     )
 
     # Start training
@@ -384,7 +421,7 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
                             if key.startswith("eval_"):
                                 eval_metrics[key] = value
 
-        # Add summary information to wandb
+        # Aggiungi i risultati della valutazione al riepilogo di wandb
         wandb_run.summary.update({
             "training_completed": True,
             "completion_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
