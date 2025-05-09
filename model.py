@@ -65,15 +65,21 @@ def make_inference(model, tokenizer, image_path, question, instruction, max_leng
 
     messages = [
         {"role": "user", "content": [
+            {"type": "image"},
             {"type": "text", "text": instruction},
-            {"type": "image", "image": image},
-            {"type": "text", "text": description if description is not None else ""},
-            {"type": "text", "text": question}
+            {"type": "text", "text": question},
+            {"type": "text", "text": description if description is not None else ""}
+
         ]}
     ]
 
     input_text = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
-    inputs = tokenizer(input_text, add_special_tokens=False, return_tensors="pt").to("cuda")
+    inputs = tokenizer(
+        image,
+        input_text,
+        add_special_tokens=False,
+        return_tensors="pt",
+    ).to("cuda")
 
     # Generate without streaming
     outputs = model.generate(
