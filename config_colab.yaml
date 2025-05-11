@@ -47,7 +47,7 @@ num_proc: 4
 max_seq_length: 2048
 
 # Weights & Biases logging
-use_wandb: true
+use_wandb: false
 wandb_project: "VizSage"
 wandb_tags: ["llama3", "vision", "finetune"]
 

@@ -421,7 +421,7 @@ if __name__ == "__main__":
                 ground_truth = test_sample["answer"]
                 # If external knowledge is used, get the description
                 if config.get("external_knowledge", False) and test_sample["need_external_knowledge"]:
-                    description = semart_dataset.loc[semart_dataset['image'] == image, 'description'].values[0]
+                    description = semart_dataset.loc[semart_dataset['image_file'] == image, 'description'].values[0]
                 else:
                     description = None
 
