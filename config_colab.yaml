@@ -31,6 +31,7 @@ logging_steps: 1
 optim: "adamw_8bit"
 scheduler: "linear"
 seed: 3407
+eval_steps: 500
 
 # Inference parameters
 instruction: "You are an expert art historian. Answer the questions you will be asked about the image."

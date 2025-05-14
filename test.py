@@ -6,8 +6,12 @@ import data_utils
 from tqdm import tqdm
 import torch
 import pandas as pd
-
 import config_utils
+from collections import defaultdict
+
+# Funzione per calcolare l'Exact Match (EM)
+def calculate_exact_match(prediction, ground_truth):
+    return 1 if prediction.strip().lower() == ground_truth.strip().lower() else 0
 
 if __name__ == "__main__":
     # Check if a config file was provided as an argument
@@ -48,6 +52,9 @@ if __name__ == "__main__":
         semart_dataset = pd.read_csv(config.get("external_knowledge_path", "data/semart.csv"), sep='\t',
                                      encoding='latin1', header=0)
 
+    # Initialize metrics
+    metrics = defaultdict(int)
+
     # create a json with image_path, question, response for each sample of test_dataset
     output_json = []
     with tqdm(total=len_test_data, desc="Processing samples") as pbar:
@@ -78,6 +85,10 @@ if __name__ == "__main__":
                 base_path=config.get("base_path", "data")
             )
 
+            # Calculate Exact Match
+            em = calculate_exact_match(response, ground_truth)
+            metrics["exact_match"] += em
+
             # Append to output json
             output_json.append({
                 "image_path": image_path,
@@ -88,6 +99,10 @@ if __name__ == "__main__":
             })
 
             pbar.update(1)
+
+    # Calculate Exact Match percentage
+    em_percentage = (metrics["exact_match"] / len_test_data) * 100 if len_test_data > 0 else 0
+    print(f"Exact Match (EM): {em_percentage:.2f}%")
 
     # Save the output json to a file
     output_file = os.path.join(path, "test_output.json")

@@ -14,7 +14,8 @@ from datetime import datetime
 import random
 from datasets import Dataset, load_from_disk
 import pandas as pd
-
+from transformers.trainer_utils import EvalPrediction
+import numpy as np
 
 # Load environment variables from .env file
 load_dotenv()
@@ -186,8 +187,38 @@ def train(model, tokenizer, converted_dataset, config, wandb_run=None):
     return trainer
 
 
-def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None, len_train_dataset=None):
+def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None, len_train_dataset=None, val_dataset=None):
     """Train the model with streaming dataset"""
+
+    def formatting_func(example):
+        return tokenizer.apply_chat_template(
+            example["messages"],
+            tokenize=False,
+            add_generation_prompt=False
+        )
+
+    # 1) Conversione logits → predizioni (IDs)
+    def preprocess_logits_for_metrics(logits, labels):
+        # logits: Tensor [batch_size, seq_len, vocab_size]
+        # vogliamo l'id predetto per ogni pos
+        return logits.argmax(dim=-1)
+
+    # 2) Calcolo Exact Match
+    def compute_exact_match(p: EvalPrediction):
+        pred_ids, label_ids = p.predictions, p.label_ids
+
+        # decodifica in testo
+        decoded_preds = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
+        decoded_labels = tokenizer.batch_decode(label_ids, skip_special_tokens=True)
+
+        # normalize
+        def norm(t: str):
+            return t.strip().lower()
+
+        matches = [int(norm(a) == norm(b)) for a, b in zip(decoded_preds, decoded_labels)]
+        em_score = float(np.mean(matches)) if matches else 0.0
+
+        return {"exact_match": em_score}
 
     # Enable model for training
     FastVisionModel.for_training(model)
@@ -220,6 +251,13 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
         tokenizer=tokenizer,
         data_collator=UnslothVisionDataCollator(model, tokenizer),
         train_dataset=streaming_dataset,
+        eval_dataset=val_dataset,
+
+        # 3) PASSA LE DUE FUNZIONI
+        preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+        compute_metrics=compute_exact_match,
+        formatting_func=formatting_func,
+
         args=SFTConfig(
             per_device_train_batch_size=config.get("batch_size", 2),
             gradient_accumulation_steps=config.get("grad_accum", 4),
@@ -244,6 +282,7 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
             dataset_kwargs={"skip_prepare_dataset": True},
             dataset_num_proc=config.get("num_proc", 4),
             max_seq_length=config.get("max_seq_length", 2048),
+            eval_steps=config.get("eval_steps", 2),
         ),
     )
 
@@ -322,7 +361,10 @@ def get_model_from_config(config):
 
 if __name__ == "__main__":
     # Check if a config file was provided as an argument
-    config_file = "config.yaml"
+    if len(sys.argv) > 1:
+        config_file = sys.argv[1]
+    else:
+        config_file = "config.yaml"
 
     # Load configuration
     config = config_utils.load_config(config_file)  # Aggiornato per usare config_utils invece di utils
@@ -372,16 +414,29 @@ if __name__ == "__main__":
             # Load the external knowledge dataset
             semart_dataset = pd.read_csv(config.get("external_knowledge_path", "data/semart.csv"), sep= '\t', encoding='latin1',header=0)
             # Prepare the streaming dataset
-            stream_ready_dataset = data_utils.prepare_streaming_dataset(  # Aggiornato per usare data_utils invece di utils
+            stream_ready_dataset = data_utils.prepare_streaming_dataset(
                 streaming_dataset=train_dataset,
+                config=config,
+                semart_dataset=semart_dataset,
+                base_path=config.get("base_path", "data")
+            )
+
+            val_streaming_dataset = data_utils.prepare_streaming_dataset(
+                streaming_dataset=val_dataset,
                 config=config,
                 semart_dataset=semart_dataset,
                 base_path=config.get("base_path", "data")
             )
         else:
             # Prepare the streaming dataset without external knowledge
-            stream_ready_dataset = data_utils.prepare_streaming_dataset(  # Aggiornato per usare data_utils invece di utils
+            stream_ready_dataset = data_utils.prepare_streaming_dataset(
                 streaming_dataset=train_dataset,
+                config=config,
+                base_path=config.get("base_path", "data")
+            )
+
+            val_streaming_dataset = data_utils.prepare_streaming_dataset(
+                streaming_dataset=val_dataset,
                 config=config,
                 base_path=config.get("base_path", "data")
             )
@@ -448,7 +503,7 @@ if __name__ == "__main__":
 
         # Train the model
         print("\n=== STARTING TRAINING ===")
-        trainer = train_streaming(model, tokenizer, stream_ready_dataset, config, wandb_run, len_train_dataset)
+        trainer = train_streaming(model, tokenizer, stream_ready_dataset, config, wandb_run, len_train_dataset, val_dataset=val_streaming_dataset)
 
     else:
         if config.get("external_knowledge", False):

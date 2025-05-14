@@ -4,6 +4,7 @@ from PIL import Image
 from datasets import Dataset, IterableDataset
 
 
+
 def extract_image(image_name, base_path="data"):
     """Extract and load an image from the specified path."""
     images_path = os.path.join(base_path, "Images")
@@ -156,3 +157,6 @@ def prepare_streaming_dataset(streaming_dataset, config, semart_dataset=None, ba
     processed_dataset = dataset.map(convert_to_conversation_streaming)
 
     return processed_dataset
+
+
+
