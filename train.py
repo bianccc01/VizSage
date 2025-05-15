@@ -239,8 +239,10 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
     output_dir = config.get("output_dir", "outputs")
     os.makedirs(output_dir, exist_ok=True)
 
+    epochs = config.get("epochs", 1)
+
     # Calulate max steps based on dataset size
-    max_steps = int(len_train_dataset / (config.get("batch_size", 2) * config.get("grad_accum", 4)))
+    max_steps = epochs * (int(len_train_dataset / (config.get("batch_size", 2) * config.get("grad_accum", 4))))
 
     # how many times to save the model
     n_saves = config.get("n_saves", 5)
@@ -355,6 +357,7 @@ def get_model_from_config(config):
         bias=config.get("lora_bias", "none"),
         random_state=config.get("random_state", 3407),
         use_rslora=config.get("use_rslora", False),
+        finetune_norm_layers=config.get("finetune_norm_layers", False),
     )
     return model, tokenizer
 
