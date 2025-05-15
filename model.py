@@ -6,7 +6,7 @@ from transformers import AutoTokenizer, TextStreamer
 def get_model(model_name = "unsloth/Llama-3.2-11B-Vision-Instruct", load_in_4bit = True,
               use_gradient_checkpointing = "unsloth", finetune_vision_layers = False, finetune_language_layers = True,
               finetune_attention_modules = True, finetune_mlp_modules = True, r = 16, lora_alpha = 16, lora_dropout = 0,
-              bias = "none", random_state = 3407, use_rslora = False, loftq_config = None):
+              bias = "none", random_state = 3407, use_rslora = False, loftq_config = None, finetune_norm_layers = False):
 
     # 4bit pre quantized models we support for 4x faster downloading + no OOMs.
     fourbit_models = [
@@ -39,6 +39,7 @@ def get_model(model_name = "unsloth/Llama-3.2-11B-Vision-Instruct", load_in_4bit
         finetune_language_layers   = finetune_language_layers, # False if not finetuning language layers
         finetune_attention_modules = finetune_attention_modules, # False if not finetuning attention modules
         finetune_mlp_modules       = finetune_mlp_modules, # False if not finetuning MLP modules
+        finetune_norm_layers       = finetune_norm_layers, # False if not finetuning norm layers
 
         r = r,           # The larger, the higher the accuracy, but might overfit
         lora_alpha = lora_alpha,  # Recommended alpha == r at least
