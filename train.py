@@ -198,21 +198,15 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
             add_generation_prompt=False
         )
 
-    # 1) Conversione logits → predizioni (IDs)
     def preprocess_logits_for_metrics(logits, labels):
-        # logits: Tensor [batch_size, seq_len, vocab_size]
-        # vogliamo l'id predetto per ogni pos
         return logits.argmax(dim=-1)
 
-    # 2) Calcolo Exact Match
     def compute_exact_match(p: EvalPrediction):
         pred_ids, label_ids = p.predictions, p.label_ids
 
-        # decodifica in testo
         decoded_preds = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
         decoded_labels = tokenizer.batch_decode(label_ids, skip_special_tokens=True)
 
-        # normalize
         def norm(t: str):
             return t.strip().lower()
 
@@ -221,28 +215,20 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
 
         return {"exact_match": em_score}
 
-    # Enable model for training
     FastVisionModel.for_training(model)
 
-    model.gradient_checkpointing_enable()
-
-    # Set BF16/FP16 based on configuration and hardware support
     use_bf16 = is_bf16_supported() and config.get("use_bf16", True)
     use_fp16 = not use_bf16
 
-    # Set wandb logging
     report_to = "wandb" if wandb_run else "none"
 
-    # Create output directory
     output_dir = config.get("output_dir", "outputs")
     os.makedirs(output_dir, exist_ok=True)
 
     epochs = config.get("epochs", 1)
 
-    # Calulate max steps based on dataset size
     max_steps = epochs * (int(len_train_dataset / (config.get("batch_size", 2) * config.get("grad_accum", 4))))
 
-    # how many times to save the model
     n_saves = config.get("n_saves", 5)
     save_steps = max(1, max_steps // n_saves)
 
@@ -285,38 +271,33 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
     )
 
     class ClearCacheCallback(TrainerCallback):
-        def on_evaluate(self, args, state: TrainerState, control: TrainerControl, **kwargs):
+        def on_step_end(self, args, state: TrainerState, control: TrainerControl, **kwargs):
             import torch, gc
             torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
             gc.collect()
             return control
 
     trainer.add_callback(ClearCacheCallback())
 
-    # Start training
-    print(
-        f"Starting streaming training with batch size {config.get('batch_size', 2)} and max steps {max_steps}")
+    print(f"Starting streaming training with batch size {config.get('batch_size', 2)} and max steps {max_steps}")
     trainer.train()
     print("Training completed successfully!")
 
     name_trained_model = config.get("name_trained_model", "VizSage_final_model")
 
-    # Save final model
     final_model_path = f"{output_dir}/{name_trained_model}"
     model.save_pretrained(final_model_path)
     tokenizer.save_pretrained(final_model_path)
     print(f"Model saved to {final_model_path}")
 
-    # Log model metadata to wandb if enabled
     if wandb_run:
-        # Adatta il logging wandb per lo streaming
         wandb_run.summary.update({
             "training_completed": True,
             "completion_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "final_model_path": final_model_path,
         })
 
-        # Create a text summary instead of saving the model card as an artifact
         model_card_text = f"""
         # VizSage Model Summary
 
@@ -336,14 +317,13 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
         - Saved to: {final_model_path}
         """
 
-        # Log the text summary directly to wandb
         wandb.log({"model_card": wandb.Html(model_card_text.replace('\n', '<br>'))})
 
-        # Also save the model card locally
         with open(f"{final_model_path}/model_card.md", "w") as f:
             f.write(model_card_text)
 
     return trainer
+
 
 
 def get_model_from_config(config):
@@ -368,6 +348,10 @@ def get_model_from_config(config):
 
 
 if __name__ == "__main__":
+
+    import os
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
     # Check if a config file was provided as an argument
     if len(sys.argv) > 1:
         config_file = sys.argv[1]

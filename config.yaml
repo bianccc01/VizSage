@@ -22,7 +22,7 @@ use_rslora: false
 random_state: 3407
 
 # Training parameters
-batch_size: 4
+batch_size: 2
 grad_accum: 8
 warmup_steps: 5
 epochs: 2
