@@ -11,7 +11,7 @@ finetune_vision_layers: false
 finetune_language_layers: true
 finetune_attention_modules: true
 finetune_mlp_modules: true
-finetune_norm_layers: true
+finetune_norm_layers: false
 
 # LoRA parameters
 lora_r: 16
@@ -49,7 +49,7 @@ num_proc: 4
 max_seq_length: 2048
 
 # Weights & Biases logging
-use_wandb: false
+use_wandb: true
 wandb_project: "VizSage"
 wandb_tags: ["llama3", "vision", "finetune"]
 

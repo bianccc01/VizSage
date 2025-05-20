@@ -16,6 +16,7 @@ from datasets import Dataset, load_from_disk
 import pandas as pd
 from transformers.trainer_utils import EvalPrediction
 import numpy as np
+from transformers import TrainerCallback, TrainerState, TrainerControl
 
 # Load environment variables from .env file
 load_dotenv()
@@ -223,17 +224,14 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
     # Enable model for training
     FastVisionModel.for_training(model)
 
+    model.gradient_checkpointing_enable()
+
     # Set BF16/FP16 based on configuration and hardware support
     use_bf16 = is_bf16_supported() and config.get("use_bf16", True)
     use_fp16 = not use_bf16
 
     # Set wandb logging
     report_to = "wandb" if wandb_run else "none"
-
-    # Set max steps for streaming
-    max_steps = config.get("max_steps", 1000)
-    if max_steps is None or max_steps <= 0:
-        max_steps = 1000
 
     # Create output directory
     output_dir = config.get("output_dir", "outputs")
@@ -254,8 +252,6 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
         data_collator=UnslothVisionDataCollator(model, tokenizer),
         train_dataset=streaming_dataset,
         eval_dataset=val_dataset,
-
-        # 3) PASSA LE DUE FUNZIONI
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         compute_metrics=compute_exact_match,
         formatting_func=formatting_func,
@@ -287,6 +283,15 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
             eval_steps=config.get("eval_steps", 2),
         ),
     )
+
+    class ClearCacheCallback(TrainerCallback):
+        def on_evaluate(self, args, state: TrainerState, control: TrainerControl, **kwargs):
+            import torch, gc
+            torch.cuda.empty_cache()
+            gc.collect()
+            return control
+
+    trainer.add_callback(ClearCacheCallback())
 
     # Start training
     print(
