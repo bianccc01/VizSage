@@ -1,6 +1,5 @@
 import yaml
 import sys
-import os
 from unsloth import FastVisionModel, is_bf16_supported
 from unsloth.trainer import UnslothVisionDataCollator
 from trl import SFTTrainer, SFTConfig
@@ -356,7 +355,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         config_file = sys.argv[1]
     else:
-        config_file = "config.yaml"
+        config_file = "../config/config.yaml"
 
     # Load configuration
     config = config_utils.load_config(config_file)  # Aggiornato per usare config_utils invece di utils
