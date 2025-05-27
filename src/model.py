@@ -75,8 +75,8 @@ def make_inference(model, tokenizer, image_path, question, instruction, max_leng
 
     input_text = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
     inputs = tokenizer(
-        image,
-        input_text,
+        text=input_text,
+        images = image,
         add_special_tokens=True,
         return_tensors="pt",
     ).to("cuda")
@@ -89,8 +89,7 @@ def make_inference(model, tokenizer, image_path, question, instruction, max_leng
         top_p=top_p,
         top_k=top_k,
         num_beams=1,
-        do_sample=do_sample,
-        return_dict=return_dict
+        do_sample=do_sample
     )
 
     # Get the full text
