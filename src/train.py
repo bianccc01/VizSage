@@ -1,5 +1,6 @@
 import yaml
 import sys
+import os
 from unsloth import FastVisionModel, is_bf16_supported
 from unsloth.trainer import UnslothVisionDataCollator
 from trl import SFTTrainer, SFTConfig
@@ -9,13 +10,16 @@ import config_utils
 from dotenv import load_dotenv
 import wandb
 import socket
-from datetime import datetime
 import random
 from datasets import Dataset, load_from_disk
 import pandas as pd
-from transformers.trainer_utils import EvalPrediction
+from transformers import TrainerCallback, TrainerState, TrainerControl, EarlyStoppingCallback, EvalPrediction
 import numpy as np
-from transformers import TrainerCallback, TrainerState, TrainerControl
+import re
+import unicodedata
+from datetime import datetime
+import torch
+import gc
 
 # Load environment variables from .env file
 load_dotenv()
@@ -187,50 +191,397 @@ def train(model, tokenizer, converted_dataset, config, wandb_run=None):
     return trainer
 
 
-def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None, len_train_dataset=None, val_dataset=None):
-    """Train the model with streaming dataset"""
+def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None, len_train_dataset=None,
+                    val_dataset=None):
+    """
+    Train the model with streaming dataset for vision tasks
+
+    Args:
+        model: The vision model to train
+        tokenizer: Tokenizer for text processing
+        streaming_dataset: Training dataset in streaming format
+        config: Training configuration dictionary
+        wandb_run: Optional wandb run for logging
+        len_train_dataset: Length of training dataset
+        val_dataset: Optional validation dataset
+
+    Returns:
+        trainer: The trained SFTTrainer object
+    """
 
     def formatting_func(example):
-        return tokenizer.apply_chat_template(
-            example["messages"],
-            tokenize=False,
-            add_generation_prompt=False
-        )
+        """
+        Format the conversation for vision model training
+        Converts multimodal conversations (text + images) to model format
+        """
+        try:
+            messages = example.get("messages", [])
+
+            if not messages:
+                print("Warning: Empty messages in example")
+                return ""
+
+            # Debug counter for first few examples
+            if not hasattr(formatting_func, 'debug_count'):
+                formatting_func.debug_count = 0
+
+            # Debug output for first 3 examples
+            if formatting_func.debug_count < 3:
+                print(f"\n=== Formatting Debug {formatting_func.debug_count} ===")
+                print(f"Messages: {len(messages)} messages")
+
+                for i, msg in enumerate(messages):
+                    print(f"  Message {i} - Role: {msg.get('role', 'NO_ROLE')}")
+                    content = msg.get('content', [])
+
+                    if isinstance(content, list):
+                        for j, content_item in enumerate(content):
+                            content_type = content_item.get('type', 'unknown')
+                            if content_type == 'text':
+                                text_preview = content_item.get('text', '')[:50]
+                                print(f"    Content {j} (text): {text_preview}...")
+                            else:
+                                print(f"    Content {j} ({content_type})")
+                    else:
+                        print(f"    Content: {str(content)[:50]}...")
+
+            # Apply chat template to convert messages to model format
+            formatted = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=False
+            )
+
+            # Cleanup corrupted characters and control characters
+            if formatted:
+                formatted = formatted.replace('锦', '')  # Remove specific corrupted character
+                formatted = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', formatted)  # Remove control chars
+                formatted = formatted.strip()
+
+            # Debug output
+            if formatting_func.debug_count < 3:
+                print(f"Formatted length: {len(formatted) if formatted else 0}")
+                print(f"Formatted preview: {formatted[:200] if formatted else 'EMPTY'}...")
+                formatting_func.debug_count += 1
+                print("=" * 50)
+
+            return formatted or ""
+
+        except Exception as e:
+            print(f"Error in formatting_func: {e}")
+            print(f"Example keys: {list(example.keys()) if isinstance(example, dict) else 'Not a dict'}")
+            return ""
+
+    def extract_assistant_response(text, tokenizer):
+        """
+        Extract only the assistant's response from the formatted text
+        This focuses evaluation on what the model should actually predict
+        """
+        try:
+            if not text or not isinstance(text, str):
+                return ""
+
+            # Debug counter for detailed logging
+            if not hasattr(extract_assistant_response, 'debug_count'):
+                extract_assistant_response.debug_count = 0
+
+            # Show detailed debug for first few examples
+            if extract_assistant_response.debug_count < 3:
+                print(f"\n=== EXTRACT DEBUG {extract_assistant_response.debug_count} ===")
+                print(f"Full text to extract from (first 500 chars):")
+                print(f"'{text[:500]}...'")
+                extract_assistant_response.debug_count += 1
+
+            # Multiple regex patterns to handle different chat template formats
+            patterns = [
+                # Llama format - most permissive
+                r'<\|start_header_id\|>assistant<\|end_header_id\|>\s*\n*(.*?)(?:<\|eot_id\|>|$)',
+                # ChatML format
+                r'<\|assistant\|>\s*(.*?)(?:<\||$)',
+                # Simple Assistant: format
+                r'[Aa]ssistant:\s*(.*?)(?:\n\n|<\||$)',
+                # Generic assistant format
+                r'[Aa]ssistant[^a-zA-Z]+(.*?)(?:<\||$)',
+                # Fallback - everything after last "assistant"
+                r'.*[Aa]ssistant[^a-zA-Z]+(.*?)$'
+            ]
+
+            best_response = ""
+
+            # Try each pattern
+            for i, pattern in enumerate(patterns):
+                matches = re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
+                if matches:
+                    # Take the last assistant response (the one to predict)
+                    response = matches[-1].strip()
+
+                    # Basic cleanup
+                    response = response.replace('锦', '')
+                    response = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', response)
+
+                    # Remove end-of-sequence tokens and artifacts
+                    response = re.sub(r'<\|.*?\|>\s*$', '', response)
+                    response = re.sub(r'!!+\s*$', '', response)  # Remove !!!!! artifacts
+                    response = response.strip()
+
+                    # Keep the longest valid response found
+                    if len(response) > len(best_response):
+                        best_response = response
+
+                    if extract_assistant_response.debug_count <= 3:
+                        print(f"Pattern {i} found: '{response[:100]}...'")
+
+            # Final fallback: simple split on "assistant"
+            if not best_response and 'assistant' in text.lower():
+                text_lower = text.lower()
+                last_assistant_pos = text_lower.rfind('assistant')
+                if last_assistant_pos != -1:
+                    after_assistant = text[last_assistant_pos:]
+                    response = re.sub(r'^[Aa]ssistant[^a-zA-Z]*', '', after_assistant)
+                    response = response.strip()
+
+                    if response:
+                        response = response.replace('锦', '')
+                        response = re.sub(r'<\|.*?\|>\s*$', '', response)
+                        response = re.sub(r'!!+\s*$', '', response)
+                        best_response = response.strip()
+
+                        if extract_assistant_response.debug_count <= 3:
+                            print(f"Fallback split found: '{response[:100]}...'")
+
+            if extract_assistant_response.debug_count <= 3:
+                print(f"Final extracted response: '{best_response[:100]}...'")
+                print("=" * 50)
+
+            return best_response
+
+        except Exception as e:
+            print(f"Error extracting assistant response: {e}")
+            return ""
+
+    def compute_exact_match(eval_prediction):
+        """
+        Compute exact match and word F1 scores for assistant responses only
+        This provides both strict and flexible evaluation metrics
+        """
+        pred_ids, label_ids = eval_prediction.predictions, eval_prediction.label_ids
+
+        try:
+            # Convert tensors to numpy arrays if needed
+            if hasattr(pred_ids, 'cpu'):
+                pred_ids = pred_ids.cpu().numpy()
+            if hasattr(label_ids, 'cpu'):
+                label_ids = label_ids.cpu().numpy()
+
+            print(f"\n=== EVALUATION START ===")
+            print(f"Prediction shape: {pred_ids.shape}, Label shape: {label_ids.shape}")
+
+            def normalize_text(text):
+                """
+                Normalize text for robust comparison
+                Handles case, punctuation, spacing, and common articles
+                """
+                if not text or not isinstance(text, str):
+                    return ""
+
+                # Basic normalization
+                text = text.strip().lower()
+                text = re.sub(r"[^\w\s]", "", text)  # Remove punctuation
+                text = unicodedata.normalize("NFKC", text)  # Normalize unicode
+                text = re.sub(r"\s+", " ", text)  # Multiple spaces to single
+
+                # Remove common articles at start to avoid false negatives
+                articles = [r'^the\s+', r'^a\s+', r'^an\s+']
+                for article in articles:
+                    text = re.sub(article, '', text)
+
+                return text.strip()
+
+            # Storage for results
+            decoded_preds = []
+            decoded_labels = []
+            assistant_preds = []
+            assistant_labels = []
+
+            # Process each sample in the batch
+            for i, (pred_row, label_row) in enumerate(zip(pred_ids, label_ids)):
+                try:
+                    # Filter out -100 tokens (ignore tokens in loss calculation)
+                    valid_mask = label_row != -100
+                    valid_labels = label_row[valid_mask]
+
+                    # Align prediction length with valid labels
+                    if len(pred_row) >= len(valid_labels):
+                        valid_preds = pred_row[valid_mask]
+                    else:
+                        valid_preds = pred_row
+
+                    # Ensure same length for both
+                    min_len = min(len(valid_preds), len(valid_labels))
+                    valid_preds = valid_preds[:min_len]
+                    valid_labels = valid_labels[:min_len]
+
+                    # Clamp token IDs to valid vocabulary range
+                    vocab_size = getattr(tokenizer, 'vocab_size',
+                                         len(tokenizer.get_vocab()) if hasattr(tokenizer, 'get_vocab') else 128256)
+                    valid_preds = np.clip(valid_preds, 0, vocab_size - 1)
+                    valid_labels = np.clip(valid_labels, 0, vocab_size - 1)
+
+                    # Decode tokens to text
+                    full_pred = tokenizer.decode(valid_preds, skip_special_tokens=True)
+                    full_label = tokenizer.decode(valid_labels, skip_special_tokens=True)
+
+                    decoded_preds.append(full_pred)
+                    decoded_labels.append(full_label)
+
+                    # Extract only assistant responses for evaluation
+                    assistant_pred = extract_assistant_response(full_pred, tokenizer)
+                    assistant_label = extract_assistant_response(full_label, tokenizer)
+
+                    assistant_preds.append(assistant_pred)
+                    assistant_labels.append(assistant_label)
+
+                    # Debug output for first few samples
+                    if i < 3:
+                        print(f"\n=== Sample {i} ===")
+                        print(f"Full pred (first 200): {full_pred[:200]}...")
+                        print(f"Full label (first 200): {full_label[:200]}...")
+                        print(f"Assistant pred: '{assistant_pred}'")
+                        print(f"Assistant label: '{assistant_label}'")
+                        print(f"Normalized pred: '{normalize_text(assistant_pred)}'")
+                        print(f"Normalized label: '{normalize_text(assistant_label)}'")
+
+                except Exception as sample_error:
+                    print(f"Error processing sample {i}: {sample_error}")
+                    assistant_preds.append("")
+                    assistant_labels.append("")
+
+            # Calculate metrics
+            exact_matches = []
+            word_f1_scores = []
+
+            for i, (pred, label) in enumerate(zip(assistant_preds, assistant_labels)):
+                norm_pred = normalize_text(pred)
+                norm_label = normalize_text(label)
+
+                # Exact Match calculation
+                if not norm_pred and not norm_label:
+                    exact_match = True  # Both empty
+                elif not norm_pred or not norm_label:
+                    exact_match = False  # One empty, one not
+                else:
+                    exact_match = norm_pred == norm_label
+
+                exact_matches.append(int(exact_match))
+
+                # Word F1 Score calculation (more flexible metric)
+                if norm_pred and norm_label:
+                    pred_words = set(norm_pred.split())
+                    label_words = set(norm_label.split())
+
+                    if pred_words and label_words:
+                        common_words = pred_words & label_words
+                        precision = len(common_words) / len(pred_words)
+                        recall = len(common_words) / len(label_words)
+                        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0
+                        word_f1_scores.append(f1)
+                    else:
+                        word_f1_scores.append(0.0)
+                else:
+                    word_f1_scores.append(1.0 if exact_match else 0.0)
+
+                # Debug output for first few samples or non-matches
+                if i < 5 or not exact_match:
+                    print(f"\nSample {i} Evaluation:")
+                    print(f"  Pred: '{pred[:100]}{'...' if len(pred) > 100 else ''}'")
+                    print(f"  Label: '{label[:100]}{'...' if len(label) > 100 else ''}'")
+                    print(f"  Normalized Pred: '{norm_pred[:50]}{'...' if len(norm_pred) > 50 else ''}'")
+                    print(f"  Normalized Label: '{norm_label[:50]}{'...' if len(norm_label) > 50 else ''}'")
+                    print(f"  Exact Match: {exact_match}")
+                    print(f"  Word F1: {word_f1_scores[-1]:.3f}")
+
+            # Final metrics
+            exact_match_score = float(np.mean(exact_matches)) if exact_matches else 0.0
+            avg_word_f1 = float(np.mean(word_f1_scores)) if word_f1_scores else 0.0
+
+            print(f"\n=== EVALUATION RESULTS ===")
+            print(f"Total samples: {len(exact_matches)}")
+            print(f"Exact matches: {sum(exact_matches)}")
+            print(f"Exact Match Score: {exact_match_score:.4f} ({100 * exact_match_score:.1f}%)")
+            print(f"Average Word F1 Score: {avg_word_f1:.4f} ({100 * avg_word_f1:.1f}%)")
+            print(f"Match rate: {sum(exact_matches)}/{len(exact_matches)}")
+            print("=" * 30)
+
+            return {
+                "exact_match": exact_match_score,
+                "word_f1": avg_word_f1
+            }
+
+        except Exception as e:
+            print(f"Critical error in compute_exact_match: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"exact_match": 0.0, "word_f1": 0.0}
 
     def preprocess_logits_for_metrics(logits, labels):
-        return logits.argmax(dim=-1)
+        """
+        Preprocess logits to extract predictions for metrics calculation
+        Handles both single logits and tuple of logits
+        """
+        if isinstance(logits, tuple):
+            logits = logits[0]
 
-    def compute_exact_match(p: EvalPrediction):
-        pred_ids, label_ids = p.predictions, p.label_ids
+        # Get predictions from argmax of logits
+        predictions = logits.argmax(dim=-1)
 
-        decoded_preds = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
-        decoded_labels = tokenizer.batch_decode(label_ids, skip_special_tokens=True)
+        # Ensure predictions match label shape
+        if predictions.shape != labels.shape:
+            print(f"Shape mismatch: predictions {predictions.shape} vs labels {labels.shape}")
+            min_seq_len = min(predictions.shape[-1], labels.shape[-1])
+            predictions = predictions[:, :min_seq_len]
 
-        def norm(t: str):
-            return t.strip().lower()
+        return predictions
 
-        matches = [int(norm(a) == norm(b)) for a, b in zip(decoded_preds, decoded_labels)]
-        em_score = float(np.mean(matches)) if matches else 0.0
+    # === TRAINING SETUP ===
 
-        return {"exact_match": em_score}
+    print("Setting up training configuration...")
 
+    # Prepare model for training
     FastVisionModel.for_training(model)
 
+    # Mixed precision setup
     use_bf16 = is_bf16_supported() and config.get("use_bf16", True)
     use_fp16 = not use_bf16
 
+    # Logging setup
     report_to = "wandb" if wandb_run else "none"
 
+    # Output directory
     output_dir = config.get("output_dir", "outputs")
     os.makedirs(output_dir, exist_ok=True)
 
+    # Training steps calculation
     epochs = config.get("epochs", 1)
+    batch_size = config.get("batch_size", 2)
+    grad_accum = config.get("grad_accum", 4)
+    effective_batch_size = batch_size * grad_accum
 
-    max_steps = epochs * (int(len_train_dataset / (config.get("batch_size", 2) * config.get("grad_accum", 4))))
+    max_steps = epochs * (len_train_dataset // effective_batch_size) if len_train_dataset else 1000
 
+    # Save checkpoints
     n_saves = config.get("n_saves", 5)
     save_steps = max(1, max_steps // n_saves)
 
+    print(f"Training configuration:")
+    print(f"  - Epochs: {epochs}")
+    print(f"  - Batch size: {batch_size}")
+    print(f"  - Gradient accumulation: {grad_accum}")
+    print(f"  - Effective batch size: {effective_batch_size}")
+    print(f"  - Max steps: {max_steps}")
+    print(f"  - Save every: {save_steps} steps")
+    print(f"  - Mixed precision: {'BF16' if use_bf16 else 'FP16'}")
+
+    # Initialize trainer
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -240,86 +591,178 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         compute_metrics=compute_exact_match,
         formatting_func=formatting_func,
-
         args=SFTConfig(
-            per_device_train_batch_size=config.get("batch_size", 2),
-            gradient_accumulation_steps=config.get("grad_accum", 4),
+            # Batch and gradient settings
+            per_device_train_batch_size=batch_size,
+            gradient_accumulation_steps=grad_accum,
+
+            # Learning settings
+            learning_rate=config.get("lr", 2e-4),
             warmup_steps=config.get("warmup_steps", 5),
             max_steps=max_steps,
-            num_train_epochs=1,
-            learning_rate=config.get("lr", 2e-4),
+            num_train_epochs=1,  # Use max_steps instead
+
+            # Precision and optimization
             fp16=use_fp16,
             bf16=use_bf16,
-            logging_steps=config.get("logging_steps", 1),
+            max_grad_norm=config.get("max_grad_norm", 1.0),
             optim=config.get("optim", "adamw_8bit"),
             weight_decay=config.get("weight_decay", 0.01),
             lr_scheduler_type=config.get("scheduler", "linear"),
-            seed=config.get("seed", 3407),
+
+            # Sequence and data settings
+            max_seq_length=config.get("max_seq_length", 2048),
+            remove_unused_columns=False,
+            dataset_text_field="",  # Use formatting_func instead
+            dataset_kwargs={"skip_prepare_dataset": True},
+            dataset_num_proc=config.get("num_proc", 4),
+
+            # Logging and saving
+            logging_steps=config.get("logging_steps", 1),
+            save_strategy="steps",
+            save_steps=save_steps,
             output_dir=output_dir,
             report_to=report_to,
             run_name=wandb_run.name if wandb_run else None,
-            save_strategy="steps",
-            save_steps=save_steps,
-            remove_unused_columns=False,
-            dataset_text_field="",
-            dataset_kwargs={"skip_prepare_dataset": True},
-            dataset_num_proc=config.get("num_proc", 4),
-            max_seq_length=config.get("max_seq_length", 2048),
-            eval_steps=config.get("eval_steps", 2),
+
+            # Evaluation settings
+            eval_strategy="steps" if val_dataset else "no",
+            eval_steps=config.get("eval_steps", save_steps) if val_dataset else None,
+            metric_for_best_model="eval_exact_match" if val_dataset else None,
+            greater_is_better=True if val_dataset else None,
+            load_best_model_at_end=True if val_dataset else False,
+
+            # System settings
+            seed=config.get("seed", 3407),
         ),
     )
 
-    class ClearCacheCallback(TrainerCallback):
+    # Add memory management callback
+    class MemoryManagementCallback(TrainerCallback):
+        """Callback to manage GPU memory during training"""
+
         def on_step_end(self, args, state: TrainerState, control: TrainerControl, **kwargs):
-            import torch, gc
-            torch.cuda.empty_cache()
-            torch.cuda.ipc_collect()
+            # Clear GPU cache periodically
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
             gc.collect()
             return control
 
-    trainer.add_callback(ClearCacheCallback())
+        def on_evaluate(self, args, state: TrainerState, control: TrainerControl, **kwargs):
+            # Clear cache before evaluation
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            gc.collect()
+            return control
 
-    print(f"Starting streaming training with batch size {config.get('batch_size', 2)} and max steps {max_steps}")
-    trainer.train()
-    print("Training completed successfully!")
+    trainer.add_callback(MemoryManagementCallback())
 
-    name_trained_model = config.get("name_trained_model", "VizSage_final_model")
+    # Add early stopping if requested
+    if config.get("use_early_stopping", False) and val_dataset:
+        patience_ratio = config.get("early_stopping_patience_ratio", 0.1)
+        patience_steps = max(1, int(max_steps * patience_ratio))
 
-    final_model_path = f"{output_dir}/{name_trained_model}"
-    model.save_pretrained(final_model_path)
-    tokenizer.save_pretrained(final_model_path)
-    print(f"Model saved to {final_model_path}")
+        early_stopping_callback = EarlyStoppingCallback(
+            early_stopping_patience=patience_steps,
+            early_stopping_threshold=config.get("early_stopping_threshold", 0.001),
+        )
+
+        trainer.add_callback(early_stopping_callback)
+        print(f"Early stopping enabled: patience={patience_steps} steps")
+
+    # === TRAINING ===
+
+    print(f"\nStarting training...")
+    print(f"Dataset size: {len_train_dataset if len_train_dataset else 'Unknown'}")
+    print(f"Validation dataset: {'Yes' if val_dataset else 'No'}")
+
+    try:
+        trainer.train()
+        print("\nTraining completed successfully!")
+
+    except Exception as e:
+        print(f"\nTraining failed with error: {e}")
+        raise
+
+    # === MODEL SAVING ===
+
+    model_name = config.get("name_trained_model", "VizSage_final_model")
+    final_model_path = os.path.join(output_dir, model_name)
+
+    print(f"\nSaving model to: {final_model_path}")
+
+    try:
+        model.save_pretrained(final_model_path)
+        tokenizer.save_pretrained(final_model_path)
+        print("Model saved successfully!")
+
+    except Exception as e:
+        print(f"Error saving model: {e}")
+        raise
+
+    # === WANDB LOGGING ===
 
     if wandb_run:
-        wandb_run.summary.update({
-            "training_completed": True,
-            "completion_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "final_model_path": final_model_path,
-        })
+        try:
+            # Update run summary
+            wandb_run.summary.update({
+                "training_completed": True,
+                "completion_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "final_model_path": final_model_path,
+                "total_steps": max_steps,
+                "final_loss": trainer.state.log_history[-1].get("train_loss",
+                                                                "N/A") if trainer.state.log_history else "N/A"
+            })
 
-        model_card_text = f"""
-        # VizSage Model Summary
+            # Create and save model card
+            model_card_text = f"""
+# VizSage Model Training Summary
 
-        ## Model Information
-        - Base model: {config.get('model_name')}
-        - Fine-tuned on: {config.get('dataset')}
-        - Date: {datetime.now().strftime("%Y-%m-%d")}
+## Model Information
+- **Base Model**: {config.get('model_name', 'Unknown')}
+- **Dataset**: {config.get('dataset', 'Unknown')}
+- **Training Date**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+- **Model Path**: {final_model_path}
 
-        ## Training Parameters
-        - Batch size: {config.get('batch_size')}
-        - Learning rate: {config.get('lr')}
-        - Max steps: {max_steps}
-        - LoRA rank: {config.get('lora_r')}
-        - Training mode: Streaming
+## Training Configuration
+- **Batch Size**: {batch_size}
+- **Gradient Accumulation**: {grad_accum}
+- **Effective Batch Size**: {effective_batch_size}
+- **Learning Rate**: {config.get('lr', 2e-4)}
+- **Max Steps**: {max_steps}
+- **Max Sequence Length**: {config.get('max_seq_length', 2048)}
+- **Mixed Precision**: {'BF16' if use_bf16 else 'FP16'}
 
-        ## Local Path
-        - Saved to: {final_model_path}
-        """
+## LoRA Configuration
+- **LoRA Rank**: {config.get('lora_r', 'N/A')}
+- **LoRA Alpha**: {config.get('lora_alpha', 'N/A')}
+- **LoRA Dropout**: {config.get('lora_dropout', 'N/A')}
 
-        wandb.log({"model_card": wandb.Html(model_card_text.replace('\n', '<br>'))})
+## Training Mode
+- **Mode**: Streaming Dataset
+- **Evaluation**: {'Enabled' if val_dataset else 'Disabled'}
+- **Early Stopping**: {'Enabled' if config.get('use_early_stopping', False) else 'Disabled'}
 
-        with open(f"{final_model_path}/model_card.md", "w") as f:
-            f.write(model_card_text)
+## Performance
+- **Final Training Loss**: {trainer.state.log_history[-1].get('train_loss', 'N/A') if trainer.state.log_history else 'N/A'}
+- **Best Validation Score**: {trainer.state.best_metric if hasattr(trainer.state, 'best_metric') else 'N/A'}
+"""
+
+            # Log model card to wandb
+            wandb.log({"model_card": wandb.Html(model_card_text.replace('\n', '<br>'))})
+
+            # Save model card locally
+            with open(os.path.join(final_model_path, "model_card.md"), "w") as f:
+                f.write(model_card_text)
+
+            print("Model card saved and logged to wandb")
+
+        except Exception as e:
+            print(f"Warning: Error updating wandb: {e}")
+
+    print(f"\n🎉 Training pipeline completed!")
+    print(f"📁 Model saved at: {final_model_path}")
 
     return trainer
 
@@ -358,7 +801,7 @@ if __name__ == "__main__":
         config_file = "../config/config.yaml"
 
     # Load configuration
-    config = config_utils.load_config(config_file)  # Aggiornato per usare config_utils invece di utils
+    config = config_utils.load_config(config_file)
 
     # Setup wandb logging
     wandb_run = setup_wandb(config)
