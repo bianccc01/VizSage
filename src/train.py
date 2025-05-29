@@ -547,9 +547,14 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
 
     max_steps = epochs * (len_train_dataset // effective_batch_size) if len_train_dataset else 1000
 
+    eval_steps = config.get("eval_steps", max(1, max_steps // 10))
+
     # Save checkpoints
     n_saves = config.get("n_saves", 5)
-    save_steps = max(1, max_steps // n_saves)
+    raw_save_steps = max(1, max_steps // n_saves)
+    save_steps = max(eval_steps,
+                     eval_steps * (raw_save_steps // eval_steps + (1 if raw_save_steps % eval_steps else 0)))
+
 
     print(f"Training configuration:")
     print(f"  - Epochs: {epochs}")
@@ -606,7 +611,7 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
 
             # Evaluation settings
             eval_strategy="steps" if val_dataset else "no",
-            eval_steps=config.get("eval_steps", save_steps) if val_dataset else None,
+            eval_steps=config.get("eval_steps", eval_steps) if val_dataset else None,
             metric_for_best_model="eval_exact_match" if val_dataset else None,
             greater_is_better=True if val_dataset else None,
             load_best_model_at_end=True if val_dataset else False,
