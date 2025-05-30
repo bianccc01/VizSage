@@ -27,37 +27,29 @@ load_dotenv()
 
 def setup_wandb(config):
     """Setup Weights & Biases logging"""
-    # Check if wandb logging is enabled in config
     if not config.get("use_wandb", False):
         return None
 
-    # Get wandb API key from environment variable
     wandb_api_key = os.getenv("WANDB_API_KEY")
     if not wandb_api_key:
         print("Warning: WANDB_API_KEY not found in .env file. Wandb logging disabled.")
         return None
 
-    # Login to wandb
     wandb.login(key=wandb_api_key)
 
-    # Create a unique run name
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     hostname = socket.gethostname()
     run_name = f"VizSage_{config.get('model_name', 'model').split('/')[-1]}_{timestamp}_{hostname}"
 
-    # Initialize wandb run
     wandb_run = wandb.init(
         project=config.get("wandb_project", "VizSage"),
         name=run_name,
         config={
-            # Model parameters
             "model_name": config.get("model_name"),
             "finetune_vision": config.get("finetune_vision_layers"),
             "finetune_language": config.get("finetune_language_layers"),
             "lora_r": config.get("lora_r"),
             "lora_alpha": config.get("lora_alpha"),
-
-            # Training parameters
             "batch_size": config.get("batch_size"),
             "grad_accum": config.get("grad_accum"),
             "effective_batch_size": config.get("batch_size") * config.get("grad_accum"),
@@ -66,24 +58,23 @@ def setup_wandb(config):
             "optimizer": config.get("optim"),
             "weight_decay": config.get("weight_decay"),
             "warmup_steps": config.get("warmup_steps"),
-
-            # Dataset info
             "dataset": config.get("dataset"),
             "max_seq_length": config.get("max_seq_length"),
             "external_knowledge": config.get("external_knowledge", False),
         },
         tags=config.get("wandb_tags", []),
-        # Disable model saving to wandb
         settings=wandb.Settings(
-            _disable_stats=True,  # Disable system stats
-            _disable_meta=True,  # Disable metadata collection
+            _disable_stats=False,
+            _disable_meta=False,
+            _service_wait=300,
+            start_method="thread",
         )
     )
 
-    # Disable model checkpoints sync to wandb
     os.environ["WANDB_LOG_MODEL"] = "false"
 
     return wandb_run
+
 
 
 def train(model, tokenizer, converted_dataset, config, wandb_run=None):
@@ -227,11 +218,11 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
 
             # Debug output for first 3 examples
             if formatting_func.debug_count < 3:
-                print(f"\n=== Formatting Debug {formatting_func.debug_count} ===")
-                print(f"Messages: {len(messages)} messages")
+                #print(f"\n=== Formatting Debug {formatting_func.debug_count} ===")
+                #print(f"Messages: {len(messages)} messages")
 
                 for i, msg in enumerate(messages):
-                    print(f"  Message {i} - Role: {msg.get('role', 'NO_ROLE')}")
+                    #print(f"  Message {i} - Role: {msg.get('role', 'NO_ROLE')}")
                     content = msg.get('content', [])
 
                     if isinstance(content, list):
@@ -239,11 +230,11 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
                             content_type = content_item.get('type', 'unknown')
                             if content_type == 'text':
                                 text_preview = content_item.get('text', '')[:50]
-                                print(f"    Content {j} (text): {text_preview}...")
-                            else:
-                                print(f"    Content {j} ({content_type})")
-                    else:
-                        print(f"    Content: {str(content)[:50]}...")
+                                #print(f"    Content {j} (text): {text_preview}...")
+                            #else:
+                                #print(f"    Content {j} ({content_type})")
+                    #else:
+                        #print(f"    Content: {str(content)[:50]}...")
 
             # Apply chat template to convert messages to model format
             formatted = tokenizer.apply_chat_template(
@@ -260,10 +251,10 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
 
             # Debug output
             if formatting_func.debug_count < 3:
-                print(f"Formatted length: {len(formatted) if formatted else 0}")
-                print(f"Formatted preview: {formatted[:200] if formatted else 'EMPTY'}...")
+                #print(f"Formatted length: {len(formatted) if formatted else 0}")
+                #print(f"Formatted preview: {formatted[:200] if formatted else 'EMPTY'}...")
                 formatting_func.debug_count += 1
-                print("=" * 50)
+                #print("=" * 50)
 
             return formatted or ""
 
@@ -280,17 +271,6 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
         try:
             if not text or not isinstance(text, str):
                 return ""
-
-            # Debug counter for detailed logging
-            if not hasattr(extract_assistant_response, 'debug_count'):
-                extract_assistant_response.debug_count = 0
-
-            # Show detailed debug for first few examples
-            if extract_assistant_response.debug_count < 3:
-                print(f"\n=== EXTRACT DEBUG {extract_assistant_response.debug_count} ===")
-                print(f"Full text to extract from (first 500 chars):")
-                print(f"'{text[:500]}...'")
-                extract_assistant_response.debug_count += 1
 
             # Multiple regex patterns to handle different chat template formats
             patterns = [
@@ -349,10 +329,6 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
                         if extract_assistant_response.debug_count <= 3:
                             print(f"Fallback split found: '{response[:100]}...'")
 
-            if extract_assistant_response.debug_count <= 3:
-                print(f"Final extracted response: '{best_response[:100]}...'")
-                print("=" * 50)
-
             return best_response
 
         except Exception as e:
@@ -373,8 +349,8 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
             if hasattr(label_ids, 'cpu'):
                 label_ids = label_ids.cpu().numpy()
 
-            print(f"\n=== EVALUATION START ===")
-            print(f"Prediction shape: {pred_ids.shape}, Label shape: {label_ids.shape}")
+            #print(f"\n=== EVALUATION START ===")
+            #print(f"Prediction shape: {pred_ids.shape}, Label shape: {label_ids.shape}")
 
             def normalize_text(text):
                 """
@@ -441,16 +417,6 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
                     assistant_preds.append(assistant_pred)
                     assistant_labels.append(assistant_label)
 
-                    # Debug output for first few samples
-                    if i < 3:
-                        print(f"\n=== Sample {i} ===")
-                        print(f"Full pred (first 200): {full_pred[:200]}...")
-                        print(f"Full label (first 200): {full_label[:200]}...")
-                        print(f"Assistant pred: '{assistant_pred}'")
-                        print(f"Assistant label: '{assistant_label}'")
-                        print(f"Normalized pred: '{normalize_text(assistant_pred)}'")
-                        print(f"Normalized label: '{normalize_text(assistant_label)}'")
-
                 except Exception as sample_error:
                     print(f"Error processing sample {i}: {sample_error}")
                     assistant_preds.append("")
@@ -472,15 +438,6 @@ def train_streaming(model, tokenizer, streaming_dataset, config, wandb_run=None,
                     exact_match = norm_pred == norm_label
 
                 exact_matches.append(int(exact_match))
-
-                # Debug output for first few samples or non-matches
-                if i < 5 or not exact_match:
-                    print(f"\nSample {i} Evaluation:")
-                    print(f"  Pred: '{pred[:100]}{'...' if len(pred) > 100 else ''}'")
-                    print(f"  Label: '{label[:100]}{'...' if len(label) > 100 else ''}'")
-                    print(f"  Normalized Pred: '{norm_pred[:50]}{'...' if len(norm_pred) > 50 else ''}'")
-                    print(f"  Normalized Label: '{norm_label[:50]}{'...' if len(norm_label) > 50 else ''}'")
-                    print(f"  Exact Match: {exact_match}")
 
             # Final metrics
             exact_match_score = float(np.mean(exact_matches)) if exact_matches else 0.0
@@ -782,7 +739,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         config_file = sys.argv[1]
     else:
-        config_file = "../config/config.yaml"
+        config_file = "config/config.yaml"
 
     # Load configuration
     config = config_utils.load_config(config_file)
@@ -902,9 +859,11 @@ if __name__ == "__main__":
                 print(f"Question: {question}")
                 print(f"Image path: {image}")
                 print(f"Ground truth answer: {ground_truth}")
-                print("Model prediction:")
-                pre_training_output = m.make_inference(model=model, tokenizer=tokenizer, image_path=image, question=question,
+                pre_training_output, description_passed = m.make_inference(model=model, tokenizer=tokenizer, image_path=image, question=question,
                                                        instruction=instruction, description=description, base_path=config.get("base_path", "data"))
+
+                print(f"Description: {description_passed if description_passed else 'No description provided'}")
+                print(f"Model prediction: {pre_training_output}")
 
                 # Save the test sample for post-training inference
                 post_training_test_sample = {

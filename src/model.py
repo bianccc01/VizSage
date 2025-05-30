@@ -101,7 +101,7 @@ def make_inference(model, tokenizer, image_path, question, instruction, max_leng
     else:
         assistant_response = generated_text
 
-    return assistant_response
+    return assistant_response, description if description else None
 
 
 def load_model(output_dir, load_in_4bit=True):
