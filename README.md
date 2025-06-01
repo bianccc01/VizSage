@@ -1,265 +1,387 @@
-# VizSage: Vision-Language Model Fine-tuning Framework
+# VizSage - Vision Language Model Fine-tuning
 
-VizSage is a streamlined framework for fine-tuning vision-language models (VLMs) with a focus on simplicity, flexibility, and reproducibility. The project provides an easy way to customize model parameters and training configurations through a simple YAML file.
+A comprehensive framework for fine-tuning vision-language models using LoRA (Low-Rank Adaptation) with support for streaming datasets, advanced evaluation metrics, and robust training pipelines.
 
-## 🌟 Features
+## 🚀 Features
 
-- **Easy Configuration**: Fine-tune models by modifying a single YAML file without changing code
-- **Vision Model Support**: Built specifically for vision-language models like Llama-3-Vision, Qwen2-VL, and others
-- **LoRA Fine-tuning**: Efficient parameter-efficient fine-tuning through LoRA
-- **Memory Optimization**: Process large datasets in manageable chunks
-- **Experiment Tracking**: Optional Weights & Biases integration for tracking experiments
-- **Reproducibility**: Save and reuse configurations for consistent results
+- **Multi-modal Training**: Fine-tune vision-language models on image-text pairs
+- **Streaming Support**: Handle large datasets efficiently with streaming data loading
+- **Advanced Evaluation**: Configurable text normalization and exact match evaluation
+- **LoRA Fine-tuning**: Memory-efficient training with Low-Rank Adaptation
+- **External Knowledge**: Support for external knowledge integration
+- **Robust Training**: Early stopping, memory management, and comprehensive logging
+- **Wandb Integration**: Full experiment tracking and monitoring
 
-## 🚀 Getting Started
+## 📁 Project Structure
+
+```
+VizSage/
+├── src/                           # Source code
+│   ├── train.py                   # Main training script (unified)
+│   ├── test.py                    # Testing and evaluation script
+│   ├── config_utils.py            # Configuration utilities
+│   ├── data_utils.py              # Data processing utilities
+│   ├── model.py                   # Model utilities
+│   ├── evaluation_utils.py        # Evaluation metrics and functions
+│   ├── training_utils.py          # Training callbacks and utilities
+│   └── formatting_utils.py        # Text formatting utilities
+├── config/                        # Configuration files
+│   ├── example_config.yaml        # Example configuration
+│   └── debug_config.yaml          # Debug configuration
+├── data/                          # Dataset directory
+│   ├── AQUA/                      # Dataset files
+│   │   ├── train.json
+│   │   ├── val.json
+│   │   └── test.json
+│   ├── Images/                    # Image files
+│   └── semart.csv                 # External knowledge (optional)
+├── outputs/                       # Training outputs
+└── README.md                      # This file
+```
+
+## 🛠️ Installation
 
 ### Prerequisites
 
-- Python 3.10
-- CUDA-compatible GPU with 16GB+ VRAM (recommended)
-- Hugging Face API key (required for accessing model weights)
-- Weights & Biases API key (optional, for experiment tracking)
+- Python 3.8+
+- CUDA-compatible GPU (recommended)
+- 16GB+ GPU memory for 11B models
 
-### Installation
+### Setup
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/bianccc01/vizsage.git
-   cd vizsage
-   ```
-
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Create your `.env`:
-   ```bash
-   touch .env
-   ```
-
-4. Edit the `.env` file to add your API keys:
-   ```
-   HF_TOKEN=your_hf_token_here  # Required for downloading models
-   WANDB_API_KEY=your_wandb_api_key_here  # Optional for experiment tracking
-   ```
-
-5. Download the AQUA dataset:
-   - Visit the [AQUA GitHub repository](https://github.com/noagarcia/ArtVQA/tree/master/AQUA)
-   - Download the dataset files (train.json, val.json, test.json)
-   - Create a directory structure: `data/AQUA/` and place the files there
-
-6. Download the SemArt dataset:
-   - Download the image dataset from the [SemArt website](https://noagarcia.github.io/SemArt/)
-   - Download the SemArt JSON files (train.json, test.json, val.json)
-   - Place the images in your desired directory (you'll configure this path in the next step)
-   - Create a single `semart.csv` file that combines all train, test, and val data from SemArt (this file is required for providing descriptions for questions that need external knowledge)
-   - Place the `semart.csv` file in the `data/` directory
-
-## 📋 Usage
-
-### Prepare Your Dataset
-
-VizSage is currently configured to work with the [AQUA dataset](https://github.com/noagarcia/ArtVQA/tree/master/AQUA), which contains visual question answering pairs for artwork.
-
-The dataset uses the following structure:
-```
-/path/to/your/data/
-├── AQUA/
-│   ├── train.json
-│   ├── val.json
-│   └── test.json
-├── semart.csv  # Combined SemArt dataset for external knowledge descriptions
-└── Images/
-    ├── 1234_painting.jpg
-    ├── 5678_painting.jpg
-    └── ...
+1. **Clone the repository:**
+```bash
+git clone <repository-url>
+cd VizSage
 ```
 
-Each JSON file contains entries with the following format:
-```json
-{
-  "image": "1234_painting.jpg",
-  "question": "What technique was used in this painting?",
-  "answer": "The painting uses oil on canvas...",
-  "need_external_knowledge": true
-}
+2. **Install dependencies:**
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip install unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git
+pip install transformers datasets accelerate peft trl
+pip install wandb pyyaml tqdm pandas pillow
 ```
 
-Where:
-- `image`: Image filename as in SemArt dataset
-- `question`: Question about the artwork
-- `answer`: Answer to the question
-- `need_external_knowledge`: Whether the question requires external knowledge (`True` for QAs generated from comments and `False` for QAs generated from paintings). When `True`, the system will retrieve additional descriptions from `semart.csv`
+3. **Prepare your dataset:**
+```bash
+# Place your dataset in the data/ directory
+mkdir -p data/AQUA data/Images
+# Copy your JSON files and images
+```
 
-### Configure Training
+## 🎯 Quick Start
 
-Edit `config.yaml` to customize your training:
+### Basic Training
+
+1. **Configure your training:**
+```bash
+# Copy and edit the example configuration
+cp config/example_config.yaml config/my_config.yaml
+# Edit my_config.yaml with your settings
+```
+
+2. **Start training:**
+```bash
+cd src
+python train.py ../config/my_config.yaml
+```
+
+### Testing Your Model
+
+```bash
+cd src
+python test.py ../config/my_config.yaml
+```
+
+## ⚙️ Configuration
+
+### Key Configuration Parameters
+
+#### Model Settings
+```yaml
+model_name: "unsloth/Llama-3.2-11B-Vision-Instruct"
+load_in_4bit: true
+use_gradient_checkpointing: "unsloth"
+```
+
+#### LoRA Parameters
+```yaml
+lora_r: 32                    # LoRA rank
+lora_alpha: 32                # LoRA alpha
+lora_dropout: 0.05            # LoRA dropout
+bias: "none"                  # Bias configuration
+```
+
+#### Training Parameters
+```yaml
+batch_size: 2                 # Per-device batch size
+grad_accum: 4                 # Gradient accumulation steps
+epochs: 3                     # Number of training epochs
+lr: 2e-4                      # Learning rate
+max_seq_length: 2048          # Maximum sequence length
+```
+
+#### Evaluation Settings (New!)
+```yaml
+use_text_normalization: true  # SQuAD-style text normalization
+debug_exact_match: false      # Show detailed evaluation debug
+```
+
+#### Early Stopping
+```yaml
+use_early_stopping: true      # Enable early stopping
+early_stopping_patience_ratio: 0.1  # Patience as ratio of total steps
+early_stopping_threshold: 0.001     # Minimum improvement threshold
+```
+
+#### Dataset Configuration
+```yaml
+dataset: "AQUA"               # Dataset name
+base_path: "data"             # Base data directory
+use_streaming: false          # Use streaming for large datasets
+external_knowledge: false     # Use external knowledge integration
+```
+
+### Full Configuration Example
 
 ```yaml
 # Model parameters
 model_name: "unsloth/Llama-3.2-11B-Vision-Instruct"
 load_in_4bit: true
-finetune_vision_layers: false
-finetune_language_layers: true
+name_trained_model: "VizSage_final_model"
 
 # LoRA parameters
-lora_r: 16
-lora_alpha: 16
+lora_r: 32
+lora_alpha: 32
+lora_dropout: 0.05
+bias: "none"
 
 # Training parameters
 batch_size: 2
 grad_accum: 4
-epochs: 1
-lr: 0.0002
+epochs: 3
+lr: 2e-4
+use_bf16: true
 
-# Dataset parameters
+# Evaluation parameters
+use_text_normalization: true
+debug_exact_match: false
+
+# Early stopping
+use_early_stopping: true
+early_stopping_patience_ratio: 0.1
+
+# Dataset
 dataset: "AQUA"
-external_knowledge: false  # Set to true to include QAs requiring external knowledge
+base_path: "data"
+use_streaming: false
+
+# Logging
+use_wandb: true
+wandb_project: "vizsage-training"
+
+# Output
+output_dir: "outputs"
 ```
 
-### Start Training
+## 📊 Evaluation Metrics
 
-Run the training script:
+The framework supports two evaluation modes:
 
+### 1. Standard Research Evaluation (Recommended)
+```yaml
+use_text_normalization: true
+```
+- Applies SQuAD-style text normalization
+- Removes articles (a, an, the)
+- Removes punctuation
+- Normalizes whitespace and case
+- **Compatible with research standards**
+
+### 2. Rigorous Evaluation
+```yaml
+use_text_normalization: false
+```
+- Exact character-by-character matching
+- No text transformations
+- **More strict evaluation**
+
+### Debug Mode
+```yaml
+debug_exact_match: true
+```
+Shows detailed comparison for the first 5 evaluation samples:
+```
+--- DEBUG SAMPLE 1 (WITH normalization) ---
+Original Prediction: 'The sky is blue.'
+Normalized Pred:    'sky is blue'
+Original Label:     'The sky is blue!'
+Normalized Label:   'sky is blue'
+Match: True
+```
+
+## 🔄 Training Modes
+
+### Regular Training
+For smaller datasets that fit in memory:
+```yaml
+use_streaming: false
+```
+
+### Streaming Training
+For large datasets:
+```yaml
+use_streaming: true
+stream_buffer_size: 1000
+```
+
+## 📈 Monitoring and Logging
+
+### Wandb Integration
+```yaml
+use_wandb: true
+wandb_project: "your-project"
+wandb_run_name: "experiment-1"  # Optional
+wandb_tags: ["vision", "llama", "fine-tuning"]
+```
+
+### Local Logging
+- Training logs saved to `outputs/`
+- Model checkpoints saved automatically
+- Detailed evaluation results in JSON format
+
+## 🧪 Testing and Evaluation
+
+### Run Full Evaluation
 ```bash
-python train.py
+cd src
+python test.py ../config/my_config.yaml
 ```
 
-Or specify a custom configuration file (Different from `config.yaml`):
+### Evaluation Features
+- **Comprehensive metrics**: Exact match, breakdown by external knowledge
+- **Sample preview**: Shows individual predictions vs ground truth
+- **Error analysis**: Detailed error reporting
+- **Results saving**: JSON format for further analysis
 
+### Example Test Output
+```
+📊 EVALUATION RESULTS (WITH normalization)
+============================================================
+Total Samples: 1000
+Correct Predictions: 847
+Incorrect Predictions: 153
+Exact Match Score: 0.8470
+Exact Match Percentage: 84.70%
+
+🧠 With External Knowledge:
+  • Samples: 450
+  • Exact Match: 82.22%
+
+📝 Without External Knowledge:
+  • Samples: 550
+  • Exact Match: 86.73%
+```
+
+## 🔧 Advanced Features
+
+### Memory Management
+- Automatic GPU memory clearing
+- Memory usage monitoring
+- Gradient checkpointing support
+
+### Early Stopping
+```yaml
+use_early_stopping: true
+early_stopping_patience_ratio: 0.1  # Stop if no improvement in 10% of steps
+early_stopping_threshold: 0.001     # Minimum improvement required
+```
+
+### External Knowledge Integration
+```yaml
+external_knowledge: true
+external_knowledge_path: "data/semart.csv"
+```
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+**Unsloth Logits Error (2024.11+)**
+The framework automatically sets `UNSLOTH_RETURN_LOGITS=1` for evaluation compatibility. If you still encounter logits errors, manually set:
 ```bash
-python train.py custom_config.yaml
+export UNSLOTH_RETURN_LOGITS=1
 ```
 
-## 🔧 Configuration Options
+**Out of Memory (OOM)**
+- Reduce `batch_size`
+- Increase `grad_accum` to maintain effective batch size
+- Use `load_in_4bit: true`
+- Enable gradient checkpointing
 
-### Model Parameters
+**Slow Training**
+- Enable `use_bf16: true` if supported
+- Use streaming for large datasets
+- Optimize `num_proc` for your system
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `model_name` | Model identifier or path | `"unsloth/Llama-3.2-11B-Vision-Instruct"` |
-| `load_in_4bit` | Use 4-bit quantization | `true` |
-| `use_gradient_checkpointing` | Gradient checkpointing strategy | `"unsloth"` |
-| `name_trained_model` | Name for saving the fine-tuned model | `"VizSage_final_model"` |
-| `finetune_vision_layers` | Fine-tune vision encoder | `false` |
-| `finetune_language_layers` | Fine-tune language model | `true` |
-| `finetune_attention_modules` | Fine-tune attention modules | `true` |
-| `finetune_mlp_modules` | Fine-tune MLP modules | `true` |
+**Validation Issues**
+- Check dataset paths in configuration
+- Ensure image files exist in `data/Images/`
+- Validate JSON file structure
 
-### LoRA Parameters
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `lora_r` | LoRA rank | `16` |
-| `lora_alpha` | LoRA scaling factor | `16` |
-| `lora_dropout` | LoRA dropout rate | `0` |
-| `lora_bias` | LoRA bias type | `"none"` |
-| `use_rslora` | Use rank-stabilized LoRA | `false` |
-| `random_state` | Random seed for LoRA initialization | `3407` |
-
-### Training Parameters
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `batch_size` | Batch size per device | `2` |
-| `grad_accum` | Gradient accumulation steps | `4` |
-| `epochs` | Number of training epochs | `1` |
-| `lr` | Learning rate | `0.0002` |
-| `warmup_steps` | Learning rate warmup steps | `5` |
-| `weight_decay` | Weight decay for AdamW optimizer | `0.01` |
-| `logging_steps` | Steps between logging updates | `1` |
-| `optim` | Optimizer | `"adamw_8bit"` |
-| `scheduler` | Learning rate scheduler | `"linear"` |
-| `seed` | Random seed for training | `3407` |
-
-### Inference Parameters
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `instruction` | System prompt for model inference | `"You are an expert art historian..."` |
-
-### Hardware Options
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `use_bf16` | Use bfloat16 precision | `true` |
-
-### Dataset and Output
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `dataset` | Dataset name | `"AQUA"` |
-| `base_path` | Base directory for data | `"data"` |
-| `external_knowledge` | Include QAs requiring external knowledge | `true` |
-| `external_knowledge_path` | Path to external knowledge file | `"data/semart.csv"` (combined SemArt dataset for retrieving descriptions of artworks) |
-| `num_proc` | Number of processes for loading | `4` |
-| `max_seq_length` | Maximum sequence length | `2048` |
-| `output_dir` | Directory to save models | `"outputs"` |
-
-### Weights & Biases (Optional)
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `use_wandb` | Enable W&B logging | `true` |
-| `wandb_project` | W&B project name | `"VizSage"` |
-| `wandb_tags` | Tags for the run | `["llama3", "vision", "finetune"]` |
-
-### Streaming Parameters
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `use_streaming` | Enable dataset streaming | `true` |
-| `stream_buffer_size` | Buffer size for streaming | `1000` |
-| `save_steps` | Number of steps between model saves | `100` |
-| `n_saves` | Maximum number of checkpoint saves to keep | `5` |
-| `test_samples_to_check` | Number of test samples to check during validation | `1` |
-
-## 📊 Experiment Tracking
-
-If you enable Weights & Biases integration, VizSage will log:
-
-- Model configuration
-- Training parameters
-- Dataset statistics
-- Training loss and metrics
-- Model summary (without uploading model weights)
-
-To view your experiments, visit [wandb.ai](https://wandb.ai).
-
-## 📁 Project Structure
-
-```
-vizsage/
-├── config.yaml           # Main configuration file
-├── train.py  # Training script with config support
-├── model.py              # Model definition and initialization
-├── data_preprocessing.py # Dataset loading and processing
-├── .env.template         # Template for environment variables
-├── requirements.txt      # Project dependencies
-└── README.md             # This documentation
+### Debug Mode
+Enable debug mode for troubleshooting:
+```yaml
+debug_exact_match: true
+logging_steps: 1
+batch_size: 1  # For debugging
+epochs: 1      # Quick test
 ```
 
-## 🔍 Troubleshooting
+## 📋 Dataset Format
 
-- **Out of memory errors**: Try reducing `batch_size`, enabling `load_in_4bit`, or setting `use_gradient_checkpointing: true`
-- **Slow training**: Increase `batch_size` if memory allows, or try a smaller model
-- **Poor results**: Adjust `lr`, `lora_r`, or increase `epochs`
-- **API key errors**: Ensure your Hugging Face API key is correctly set in the `.env` file
-- **Dataset path errors**: Check that the `base_path` in `config.yaml` points to your data directory
+### JSON Structure
+```json
+[
+  {
+    "image": "image001.jpg",
+    "question": "What is shown in this image?",
+    "answer": "A beautiful landscape",
+    "need_external_knowledge": false
+  }
+]
+```
 
-## 📜 License
+### Directory Structure
+```
+data/
+├── AQUA/
+│   ├── train.json
+│   ├── val.json
+│   └── test.json
+└── Images/
+    ├── image001.jpg
+    ├── image002.jpg
+    └── ...
+```
 
-[MIT License](LICENSE)
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
+
+## 📄 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## 🙏 Acknowledgments
 
-- [AQUA Dataset](https://github.com/noagarcia/ArtVQA/tree/master/AQUA) for the art visual question answering data
-- [SemArt Dataset](https://noagarcia.github.io/SemArt/) for the artwork images
-- [Unsloth](https://github.com/unslothai/unsloth) for the optimized training code
-- [Hugging Face](https://huggingface.co) for the Transformers library
-- [Weights & Biases](https://wandb.ai) for experiment tracking
+- [Unsloth](https://github.com/unslothai/unsloth) for efficient model training
+- [Hugging Face](https://huggingface.co/) for transformers and datasets
+- [Weights & Biases](https://wandb.ai/) for experiment tracking
 
-## 📧 Contact
-
-For questions or issues, please open an issue on GitHub
+---

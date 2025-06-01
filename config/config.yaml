@@ -17,9 +17,9 @@ finetune_norm_layers: false
 lora_r: 32
 lora_alpha: 32
 lora_dropout: 0.05
-lora_bias: "none"
+bias: "none"
 use_rslora: true
-random_state: 3407
+
 
 # Training parameters
 batch_size: 2
@@ -31,19 +31,28 @@ weight_decay: 0.02
 logging_steps: 1
 optim: "adamw_8bit"
 scheduler: "cosine"
-seed: 0
+seed: 3407
 eval_steps: 100
 max_grad_norm: 1.0
+use_text_normalization: true
 
-# early stopping parameters
-use_early_stopping: true
-early_stopping_patience_ratio: 1
+debug_exact_match: false
+
+# Early stopping parameters
+use_early_stopping: false
+early_stopping_patience_ratio: 0.1
 early_stopping_threshold: 0.001
-early_stopping_metric: "eval_loss"
-early_stopping_greater_is_better: false
+
 
 # Inference parameters
 instruction: "You are an expert art historian. Answer the questions you will be asked about the image."
+
+max_new_tokens: 128
+temperature: 0.1
+top_p: 0.95
+top_k: 50
+num_beams: 1
+do_sample: true
 
 # Hardware options
 use_bf16: true
@@ -56,6 +65,8 @@ external_knowledge_path: "data/semart.csv"
 num_proc: 4
 max_seq_length: 2048
 
+reproducible: false  # true = use fixed seed, false = random each run
+
 # Weights & Biases logging
 use_wandb: true
 wandb_project: "VizSage"
@@ -64,9 +75,12 @@ wandb_tags: ["llama3", "vision", "finetune"]
 # Output settings
 output_dir: "outputs"
 
+save_model: false  # Set to true if you want to save an additional copy
+save_path: "models/trained_model"  # Path for additional save
+
 # Streaming parameters
 use_streaming: true
 stream_buffer_size: 1000
 save_steps: 100
 n_saves: 5
-test_samples_to_check: 1
+# REMOVED: not used in the new system

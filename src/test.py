@@ -1,111 +1,132 @@
-import model as model_utils
+#!/usr/bin/env python3
+"""
+Enhanced testing script for VizSage vision model with comprehensive evaluation
+"""
+
 import os
 import sys
-import yaml
-import data_utils
+import json
+import time
+from typing import Dict, List, Any, Tuple
+from collections import defaultdict
 from tqdm import tqdm
 import torch
 import pandas as pd
+
+import model as model_utils
+import data_utils
 import config_utils
-from collections import defaultdict
+from evaluation_utils import normalize_text_squad_style
 
-# Funzione per calcolare l'Exact Match (EM)
-def calculate_exact_match(prediction, ground_truth):
-    return 1 if prediction.strip().lower() == ground_truth.strip().lower() else 0
 
-if __name__ == "__main__":
-    # Check if a config file was provided as an argument
-    if len(sys.argv) > 1:
-        config_file = sys.argv[1]
+def calculate_exact_match(prediction: str, ground_truth: str, use_normalization: bool = True) -> int:
+    """
+    Calculate exact match score with optional normalization
+
+    Args:
+        prediction: Model prediction
+        ground_truth: Ground truth answer
+        use_normalization: Whether to apply text normalization (SQuAD-style)
+
+    Returns:
+        1 if exact match, 0 otherwise
+    """
+    if use_normalization:
+        norm_pred = normalize_text_squad_style(prediction)
+        norm_gt = normalize_text_squad_style(ground_truth)
+        return 1 if norm_pred == norm_gt else 0
     else:
-        config_file = "../config/config.yaml"
+        return 1 if prediction.strip() == ground_truth.strip() else 0
 
-    # Load configuration
-    config = config_utils.load_config(config_file)  # Aggiornato per usare config_utils invece di utils
-    print(f"Loaded configuration from {config_file}")
-    path = config.get("output_dir") + "/" + config.get("name_trained_model")
-    load_in_4bit = config.get("load_in_4bit")
 
-    torch.cuda.empty_cache()
+def calculate_metrics(results: List[Dict[str, Any]], use_normalization: bool = True) -> Dict[str, float]:
+    """
+    Calculate comprehensive evaluation metrics
 
-    model, tokenizer = model_utils.load_model(
-        output_dir=path,
-        load_in_4bit=load_in_4bit
-    )
+    Args:
+        results: List of evaluation results
+        use_normalization: Whether to use text normalization
 
-    print("Model loaded successfully.")
+    Returns:
+        Dictionary of calculated metrics
+    """
+    if not results:
+        return {}
 
-    # Load the test dataset
-    use_streaming = config.get("use_streaming", True)
+    total_samples = len(results)
+    exact_matches = 0
 
-    train_dataset, val_dataset, test_dataset, len_train_data, len_test_data = data_utils.get_dataset(
-        base_path=config.get("base_path", "data"),
-        dataset=config.get("dataset", "AQUA"),
-        external_knowledge=config.get("external_knowledge", False),
-        use_streaming=use_streaming
-    )
+    # Track metrics by external knowledge requirement
+    with_external = []
+    without_external = []
 
-    description = None
+    for result in results:
+        prediction = result.get("response", "")
+        ground_truth = result.get("ground_truth", "")
+        need_external = result.get("need_external_knowledge", False)
 
-    if config.get("external_knowledge", False):
-        # If external knowledge is used, we need to load the semart dataset
-        semart_dataset = pd.read_csv(config.get("external_knowledge_path", "data/semart.csv"), sep='\t',
-                                     encoding='latin1', header=0)
+        em_score = calculate_exact_match(prediction, ground_truth, use_normalization)
+        exact_matches += em_score
 
-    # Initialize metrics
-    metrics = defaultdict(int)
+        if need_external:
+            with_external.append(em_score)
+        else:
+            without_external.append(em_score)
 
-    # create a json with image_path, question, response for each sample of test_dataset
-    output_json = []
-    with tqdm(total=len_test_data, desc="Processing samples") as pbar:
-        for sample in test_dataset:
-            image_path = sample.get("image")
-            question = sample.get("question")
-            ground_truth = sample.get("answer")
+    metrics = {
+        "total_samples": total_samples,
+        "exact_match_score": exact_matches / total_samples if total_samples > 0 else 0.0,
+        "exact_match_percentage": (exact_matches / total_samples * 100) if total_samples > 0 else 0.0,
+        "correct_predictions": exact_matches,
+        "incorrect_predictions": total_samples - exact_matches
+    }
 
-            # Check if the sample needs external knowledge
-            need_external = sample.get("need_external_knowledge", False)
-            if config.get("external_knowledge", False) and need_external and 'semart_dataset' in locals():
-                # Search for the image in the semart dataset
-                matching_rows = semart_dataset[semart_dataset['image_file'] == image_path]
-                description = matching_rows['description'].values[0] if not matching_rows.empty else None
-            else:
-                description = None
+    # Add breakdown by external knowledge
+    if with_external:
+        metrics["with_external_knowledge"] = {
+            "samples": len(with_external),
+            "exact_match_score": sum(with_external) / len(with_external),
+            "exact_match_percentage": (sum(with_external) / len(with_external) * 100)
+        }
 
-            instruction = config.get("instruction")
+    if without_external:
+        metrics["without_external_knowledge"] = {
+            "samples": len(without_external),
+            "exact_match_score": sum(without_external) / len(without_external),
+            "exact_match_percentage": (sum(without_external) / len(without_external) * 100)
+        }
 
-            # Make inference
-            response = model_utils.make_inference(
-                model=model,
-                tokenizer=tokenizer,
-                image_path=image_path,
-                question=question,
-                instruction=instruction,
-                description=description,
-                base_path=config.get("base_path", "data")
-            )
+    return metrics
 
-            # Calculate Exact Match
-            em = calculate_exact_match(response, ground_truth)
-            metrics["exact_match"] += em
 
-            # Append to output json
-            output_json.append({
-                "image_path": image_path,
-                "question": question,
-                "description": description if description is not None else "",
-                "response": response,
-                "ground_truth": ground_truth
-            })
+def print_evaluation_results(metrics: Dict[str, Any], use_normalization: bool) -> None:
+    """
+    Print formatted evaluation results
 
-            pbar.update(1)
+    Args:
+        metrics: Calculated metrics dictionary
+        use_normalization: Whether normalization was used
+    """
+    normalization_status = "WITH normalization" if use_normalization else "WITHOUT normalization"
 
-    # Calculate Exact Match percentage
-    em_percentage = (metrics["exact_match"] / len_test_data) * 100 if len_test_data > 0 else 0
-    print(f"Exact Match (EM): {em_percentage:.2f}%")
+    print("\n" + "=" * 60)
+    print(f"📊 EVALUATION RESULTS ({normalization_status})")
+    print("=" * 60)
 
-    # Save the output json to a file
-    output_file = os.path.join(path, "test_output.json")
-    with open(output_file, "w") as f:
-        yaml.dump(output_json, f)
-    print(f"Output saved to {output_file}")
+    print(f"Total Samples: {metrics.get('total_samples', 0)}")
+    print(f"Correct Predictions: {metrics.get('correct_predictions', 0)}")
+    print(f"Incorrect Predictions: {metrics.get('incorrect_predictions', 0)}")
+    print(f"Exact Match Score: {metrics.get('exact_match_score', 0):.4f}")
+    print(f"Exact Match Percentage: {metrics.get('exact_match_percentage', 0):.2f}%")
+
+    # Breakdown by external knowledge
+    if "with_external_knowledge" in metrics:
+        ext_metrics = metrics["with_external_knowledge"]
+        print(f"\n🧠 With External Knowledge:")
+        print(f"  • Samples: {ext_metrics['samples']}")
+        print(f"  • Exact Match: {ext_metrics['exact_match_percentage']:.2f}%")
+
+    if "without_external_knowledge" in metrics:
+        no_ext_metrics = metrics["without_external_knowledge"]
+        print(f"\n📝 Without External Knowledge:")
+        print(f"  • Samples: {no_ext_metrics['samples']}")
