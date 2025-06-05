@@ -7,7 +7,7 @@ use_gradient_checkpointing: "unsloth"
 name_trained_model: "VizSage_final_model"
 
 # Model fine-tuning settings
-finetune_vision_layers: true
+finetune_vision_layers: false
 finetune_language_layers: true
 finetune_attention_modules: true
 finetune_mlp_modules: true
@@ -77,6 +77,7 @@ save_path: "models/trained_model"
 
 # Streaming parameters
 use_streaming: true
+use_val_streaming: false
 stream_buffer_size: 1000
 save_steps: 20
 n_saves: 5

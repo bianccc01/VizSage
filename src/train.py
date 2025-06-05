@@ -391,9 +391,19 @@ def setup_wandb(config):
     """Setup wandb if configured"""
     try:
         if config.get("use_wandb", False):
+            # Generate run name with hostname + timestamp
+            import socket
+            hostname = socket.gethostname()
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            # Use custom name if provided, otherwise generate one
+            run_name = config.get("wandb_run_name")
+            if not run_name:
+                run_name = f"{hostname}_{timestamp}"
+
             wandb_run = wandb.init(
                 project=config.get("wandb_project", "vizsage-training"),
-                name=config.get("wandb_run_name"),
+                name=run_name,
                 config=config
             )
             print(f"Wandb logging enabled: {wandb_run.name}")
@@ -502,7 +512,8 @@ def run_pre_training_inference(model, tokenizer, test_sample, config, semart_dat
 
     try:
         if hasattr(model_utils, 'make_inference'):
-            if config.get("use_streaming", False):
+            # Call make_inference - it returns a tuple if description is provided, single value otherwise
+            if description is not None:
                 prediction, _ = model_utils.make_inference(
                     model=model, tokenizer=tokenizer, image_path=image,
                     question=question, instruction=instruction, description=description,
@@ -511,7 +522,7 @@ def run_pre_training_inference(model, tokenizer, test_sample, config, semart_dat
             else:
                 prediction = model_utils.make_inference(
                     model=model, tokenizer=tokenizer, image_path=image,
-                    question=question, instruction=instruction, description=description,
+                    question=question, instruction=instruction,
                     base_path=config.get("base_path", "data")
                 )
         else:
@@ -522,7 +533,6 @@ def run_pre_training_inference(model, tokenizer, test_sample, config, semart_dat
     except Exception as e:
         print(f"Inference error: {e}")
         return None
-
 
 def prepare_training_data(train_dataset, val_dataset, config, semart_dataset):
     """Prepare data for training with separate streaming control"""
@@ -546,12 +556,12 @@ def prepare_training_data(train_dataset, val_dataset, config, semart_dataset):
         print("Converting training dataset to conversation format...")
         if semart_dataset is not None:
             prepared_train_dataset = [
-                data_utils.convert_to_conversation(sample, semart_dataset=semart_dataset)
+                data_utils.convert_to_conversation(sample, semart_dataset=semart_dataset, base_path=config.get("base_path", "data"))
                 for sample in train_dataset
             ]
         else:
             prepared_train_dataset = [
-                data_utils.convert_to_conversation(sample)
+                data_utils.convert_to_conversation(sample, base_path=config.get("base_path", "data"))
                 for sample in train_dataset
             ]
 
@@ -567,9 +577,18 @@ def prepare_training_data(train_dataset, val_dataset, config, semart_dataset):
                 base_path=config.get("base_path", "data")
             )
         else:
-            print("Using regular validation dataset...")
-            # For regular validation, we keep the original format
-            prepared_val_dataset = val_dataset
+            print("Converting regular validation dataset to conversation format...")
+            # For regular validation, we need to convert to conversation format too
+            if semart_dataset is not None:
+                prepared_val_dataset = [
+                    data_utils.convert_to_conversation(sample, semart_dataset=semart_dataset, base_path=config.get("base_path", "data"))
+                    for sample in val_dataset
+                ]
+            else:
+                prepared_val_dataset = [
+                    data_utils.convert_to_conversation(sample, base_path=config.get("base_path", "data"))
+                    for sample in val_dataset
+                ]
 
     return prepared_train_dataset, prepared_val_dataset
 
@@ -657,6 +676,8 @@ def save_model_if_needed(model, tokenizer, config):
             print(f"Error saving model: {e}")
 
 
+
+
 def main():
     """Main training pipeline"""
     print("🚀 Starting VizSage training")
@@ -694,6 +715,16 @@ def main():
 
         # Prepare training data
         prepared_data = prepare_training_data(train_dataset, val_dataset, config, semart_dataset)
+
+        train_dataset_prep, val_dataset_prep = prepared_data
+
+        # for debug print one of train dataset examples and one of validation dataset examples
+        if train_dataset_prep:
+            first_train = next(iter(train_dataset_prep))
+            print(f"\nExample from training dataset: {first_train}")
+        if val_dataset_prep:
+            first_val = next(iter(val_dataset_prep))
+            print(f"\nExample from validation dataset: {first_val}")
 
         # Train
         trainer = run_training(model, tokenizer, prepared_data, config, wandb_run, len_train_dataset)

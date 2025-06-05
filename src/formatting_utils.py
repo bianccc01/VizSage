@@ -29,41 +29,70 @@ def create_formatting_function(tokenizer):
             Formatted conversation string
         """
         try:
+            # === NUOVO DEBUG ===
+            print(f"[DEBUG] formatting_func received example with keys: {list(example.keys())}")
+
             messages = example.get("messages", [])
 
             if not messages:
-                print("Warning: Empty messages in example")
+                print(f"Warning: Empty messages in example with keys: {list(example.keys())}")
+                print(f"Full example: {example}")
                 return ""
 
+            # === DEBUG AGGIORNATO ===
             # Debug counter for first few examples
             if not hasattr(formatting_func, 'debug_count'):
                 formatting_func.debug_count = 0
 
-            # Debug output for first 3 examples
-            if formatting_func.debug_count < 3:
+            # Debug output for first 5 examples (aumentato da 3 a 5)
+            if formatting_func.debug_count < 5:
+                print(f"\n=== FORMATTING DEBUG {formatting_func.debug_count} ===")
+                print(f"Example keys: {list(example.keys())}")
+                print(f"Messages type: {type(messages)}")
+                print(f"Messages length: {len(messages) if messages else 0}")
+                if messages:
+                    print(
+                        f"First message keys: {list(messages[0].keys()) if isinstance(messages[0], dict) else 'Not dict'}")
+                    print(f"First message: {messages[0]}")
+
                 _debug_messages(messages, formatting_func.debug_count)
 
             # Apply chat template to convert messages to model format
+            print(f"[DEBUG] Applying chat template...")
             formatted = tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
                 add_generation_prompt=False
             )
 
+            print(f"[DEBUG] Chat template result type: {type(formatted)}")
+            print(f"[DEBUG] Chat template result length: {len(formatted) if formatted else 0}")
+
             # Cleanup corrupted characters and control characters
             if formatted:
                 formatted = _clean_text(formatted)
+                print(f"[DEBUG] After cleaning, length: {len(formatted)}")
 
             # Debug output
-            if formatting_func.debug_count < 3:
+            if formatting_func.debug_count < 5:
+                print(f"[DEBUG] Final formatted output preview: {formatted[:200] if formatted else 'EMPTY'}...")
                 _debug_formatted_output(formatted, formatting_func.debug_count)
                 formatting_func.debug_count += 1
+                print(f"=== END FORMATTING DEBUG {formatting_func.debug_count - 1} ===\n")
 
-            return formatted or ""
+            # === CONTROLLO FINALE ===
+            result = formatted or ""
+            print(f"[DEBUG] Returning result type: {type(result)}, length: {len(result)}")
+
+            return result
 
         except Exception as e:
-            print(f"Error in formatting_func: {e}")
-            print(f"Example keys: {list(example.keys()) if isinstance(example, dict) else 'Not a dict'}")
+            print(f"[ERROR] Error in formatting_func: {e}")
+            print(f"[ERROR] Example keys: {list(example.keys()) if isinstance(example, dict) else 'Not a dict'}")
+            print(f"[ERROR] Example type: {type(example)}")
+            print(f"[ERROR] Full example: {example}")
+            import traceback
+            traceback.print_exc()
             return ""
 
     return formatting_func
