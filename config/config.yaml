@@ -79,6 +79,7 @@ save_path: "models/trained_model"  # Path for additional save
 
 # Streaming parameters
 use_streaming: true
+use_val_streaming: false
 stream_buffer_size: 1000
 save_steps: 100
 n_saves: 5

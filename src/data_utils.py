@@ -147,24 +147,25 @@ def filter_external_knowledge_samples(data: List[Dict], include_external: bool =
         return filtered
 
 
-def get_dataset(
+def get_dataset_with_separate_streaming(
         base_path: str = "data",
         dataset: str = "AQUA",
         external_knowledge: bool = False,
-        use_streaming: bool = False
+        use_train_streaming: bool = False,
+        use_val_streaming: bool = False
 ) -> Tuple:
     """
-    Get the dataset from the base path with optional streaming support.
+    Get the dataset with separate streaming control for train and validation datasets.
 
     Args:
         base_path: Base path for dataset
         dataset: Dataset name
         external_knowledge: Whether to include external knowledge samples
-        use_streaming: Whether to use streaming mode for large datasets
+        use_train_streaming: Whether to use streaming mode for training dataset
+        use_val_streaming: Whether to use streaming mode for validation dataset
 
     Returns:
-        For streaming: (train_dataset, val_dataset, test_dataset, train_size, test_size)
-        For regular: (train_dataset, val_dataset, test_dataset, train_size)
+        (train_dataset, val_dataset, test_dataset, train_size, test_size)
     """
     dataset_path = os.path.join(base_path, dataset)
 
@@ -187,10 +188,96 @@ def get_dataset(
     val_data = filter_external_knowledge_samples(val_data, external_knowledge)
     test_data = filter_external_knowledge_samples(test_data, external_knowledge)
 
-    if not use_streaming:
-        return train_data, val_data, test_data, len(train_data)
+    # Get sizes before conversion
+    len_train_data = len(train_data) if train_data else 0
+    len_test_data = len(test_data) if test_data else 0
+
+    # Convert datasets based on streaming preferences
+    processed_train_dataset = _convert_dataset_if_streaming(train_data, use_train_streaming, "training")
+    processed_val_dataset = _convert_dataset_if_streaming(val_data, use_val_streaming, "validation")
+
+    # Test dataset is typically not streamed for inference purposes
+    processed_test_dataset = test_data  # Keep as regular list for easier random access
+
+    print(f"\n📊 Dataset Configuration:")
+    print(f"  • Training: {'streaming' if use_train_streaming else 'regular'} ({len_train_data} samples)")
+    print(f"  • Validation: {'streaming' if use_val_streaming else 'regular'} ({len(val_data) if val_data else 0} samples)")
+    print(f"  • Test: regular ({len_test_data} samples)")
+
+    return processed_train_dataset, processed_val_dataset, processed_test_dataset, len_train_data, len_test_data
+
+
+def _convert_dataset_if_streaming(data: Optional[List], use_streaming: bool, dataset_type: str) -> Optional:
+    """
+    Convert dataset to streaming format if requested, otherwise return as-is
+
+    Args:
+        data: Data list to potentially convert
+        use_streaming: Whether to convert to streaming
+        dataset_type: Type of dataset (for logging)
+
+    Returns:
+        IterableDataset if streaming requested, otherwise original data list
+    """
+    if not data:
+        return None
+
+    if use_streaming:
+        print(f"Converting {dataset_type} dataset to streaming format...")
+
+        def gen_examples():
+            for example in data:
+                yield example
+
+        streaming_dataset = IterableDataset.from_generator(gen_examples)
+        print(f"Successfully created streaming {dataset_type} dataset")
+        return streaming_dataset
     else:
-        return _convert_to_streaming_datasets(train_data, val_data, test_data)
+        print(f"Using regular format for {dataset_type} dataset")
+        return data
+
+
+def get_dataset(
+        base_path: str = "data",
+        dataset: str = "AQUA",
+        external_knowledge: bool = False,
+        use_streaming: bool = False,
+        use_streaming_val_dataset: bool = None
+) -> Tuple:
+    """
+    Get the dataset from the base path with optional streaming support.
+    This function maintains backward compatibility while supporting the new separate streaming feature.
+
+    Args:
+        base_path: Base path for dataset
+        dataset: Dataset name
+        external_knowledge: Whether to include external knowledge samples
+        use_streaming: Whether to use streaming mode for training dataset
+        use_streaming_val_dataset: Whether to use streaming mode for validation dataset
+                                  (if None, uses same value as use_streaming for backward compatibility)
+
+    Returns:
+        For streaming: (train_dataset, val_dataset, test_dataset, train_size, test_size)
+        For regular: (train_dataset, val_dataset, test_dataset, train_size)
+    """
+    # Handle backward compatibility
+    if use_streaming_val_dataset is None:
+        use_streaming_val_dataset = use_streaming
+
+    # Use the new function with separate streaming control
+    train_dataset, val_dataset, test_dataset, len_train_data, len_test_data = get_dataset_with_separate_streaming(
+        base_path=base_path,
+        dataset=dataset,
+        external_knowledge=external_knowledge,
+        use_train_streaming=use_streaming,
+        use_val_streaming=use_streaming_val_dataset
+    )
+
+    # Maintain backward compatibility for return values
+    if use_streaming:
+        return train_dataset, val_dataset, test_dataset, len_train_data, len_test_data
+    else:
+        return train_dataset, val_dataset, test_dataset, len_train_data
 
 
 def _convert_to_streaming_datasets(
@@ -200,6 +287,7 @@ def _convert_to_streaming_datasets(
 ) -> Tuple:
     """
     Convert data lists to streaming datasets
+    DEPRECATED: Use get_dataset_with_separate_streaming instead
 
     Args:
         train_data: Training data list
@@ -209,6 +297,8 @@ def _convert_to_streaming_datasets(
     Returns:
         Tuple of (train_dataset, val_dataset, test_dataset, len_train, len_test)
     """
+    print("⚠️  Warning: _convert_to_streaming_datasets is deprecated. Use get_dataset_with_separate_streaming instead.")
+
     print("Converting datasets to streaming format...")
 
     def convert_to_streaming_dataset(data_list: Optional[List]) -> Optional[IterableDataset]:

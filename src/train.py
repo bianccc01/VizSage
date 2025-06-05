@@ -16,7 +16,6 @@ from typing import Dict, Any, Optional, List
 import wandb
 from trl import SFTTrainer, SFTConfig
 
-
 import config_utils
 import data_utils
 import model as model_utils
@@ -125,8 +124,8 @@ def train_streaming(
             # Evaluation settings
             eval_strategy="steps" if val_dataset else "no",
             eval_steps=enhanced_config.get("eval_steps", enhanced_config["eval_steps"]) if val_dataset else None,
-            metric_for_best_model="eval_exact_match" if val_dataset else None,
-            greater_is_better=True if val_dataset else None,
+            metric_for_best_model="eval_loss" if val_dataset else None,
+            greater_is_better=False if val_dataset else None,
             load_best_model_at_end=True if val_dataset else False,
 
             # System settings
@@ -418,26 +417,23 @@ def setup_reproducibility(config):
         print("Using random seed for different results each run")
 
 
-def prepare_datasets(config, use_streaming):
-    """Load and prepare datasets"""
-    print(f"Loading datasets ({'streaming' if use_streaming else 'regular'} mode)")
+def prepare_datasets(config):
+    """Load and prepare datasets with separate streaming control for train and validation"""
+    use_train_streaming = config.get("use_streaming", False)
+    use_val_streaming = config.get("use_val_streaming", use_train_streaming)  # Default to same as training
 
-    # Load datasets
-    if use_streaming:
-        train_dataset, val_dataset, test_dataset, len_train_dataset, len_test_dataset = data_utils.get_dataset(
-            base_path=config.get("base_path", "data"),
-            dataset=config.get("dataset", "AQUA"),
-            external_knowledge=config.get("external_knowledge", False),
-            use_streaming=use_streaming
-        )
-    else:
-        train_dataset, val_dataset, test_dataset, len_train_dataset = data_utils.get_dataset(
-            base_path=config.get("base_path", "data"),
-            dataset=config.get("dataset", "AQUA"),
-            external_knowledge=config.get("external_knowledge", False),
-            use_streaming=use_streaming
-        )
-        len_test_dataset = len(test_dataset) if test_dataset else 0
+    print(f"Loading datasets:")
+    print(f"  - Training: {'streaming' if use_train_streaming else 'regular'} mode")
+    print(f"  - Validation: {'streaming' if use_val_streaming else 'regular'} mode")
+
+    # Load datasets with separate streaming settings
+    train_dataset, val_dataset, test_dataset, len_train_dataset, len_test_dataset = data_utils.get_dataset_with_separate_streaming(
+        base_path=config.get("base_path", "data"),
+        dataset=config.get("dataset", "AQUA"),
+        external_knowledge=config.get("external_knowledge", False),
+        use_train_streaming=use_train_streaming,
+        use_val_streaming=use_val_streaming
+    )
 
     # Load external knowledge if needed
     semart_dataset = None
@@ -453,12 +449,12 @@ def prepare_datasets(config, use_streaming):
     return train_dataset, val_dataset, test_dataset, len_train_dataset, len_test_dataset, semart_dataset
 
 
-def select_test_sample(test_dataset, use_streaming):
+def select_test_sample(test_dataset, is_streaming):
     """Select a random test sample for inference comparison"""
     if not test_dataset:
         return None
 
-    if use_streaming:
+    if is_streaming:
         # For streaming: collect a few samples and pick randomly
         temp_samples = []
         for i, example in enumerate(test_dataset):
@@ -528,70 +524,88 @@ def run_pre_training_inference(model, tokenizer, test_sample, config, semart_dat
         return None
 
 
-def prepare_training_data(train_dataset, val_dataset, config, semart_dataset, use_streaming):
-    """Prepare data for training"""
-    if use_streaming:
-        print("Preparing streaming datasets...")
+def prepare_training_data(train_dataset, val_dataset, config, semart_dataset):
+    """Prepare data for training with separate streaming control"""
+    use_train_streaming = config.get("use_streaming", False)
+    use_val_streaming = config.get("use_val_streaming", use_train_streaming)
 
-        stream_ready_dataset = data_utils.prepare_streaming_dataset(
+    print("Preparing training datasets...")
+    print(f"  - Training streaming: {use_train_streaming}")
+    print(f"  - Validation streaming: {use_val_streaming}")
+
+    # Prepare training dataset
+    if use_train_streaming:
+        print("Preparing streaming training dataset...")
+        prepared_train_dataset = data_utils.prepare_streaming_dataset(
             streaming_dataset=train_dataset,
             config=config,
             semart_dataset=semart_dataset,
             base_path=config.get("base_path", "data")
         )
+    else:
+        print("Converting training dataset to conversation format...")
+        if semart_dataset is not None:
+            prepared_train_dataset = [
+                data_utils.convert_to_conversation(sample, semart_dataset=semart_dataset)
+                for sample in train_dataset
+            ]
+        else:
+            prepared_train_dataset = [
+                data_utils.convert_to_conversation(sample)
+                for sample in train_dataset
+            ]
 
-        val_streaming_dataset = None
-        if val_dataset:
-            val_streaming_dataset = data_utils.prepare_streaming_dataset(
+    # Prepare validation dataset
+    prepared_val_dataset = None
+    if val_dataset:
+        if use_val_streaming:
+            print("Preparing streaming validation dataset...")
+            prepared_val_dataset = data_utils.prepare_streaming_dataset(
                 streaming_dataset=val_dataset,
                 config=config,
                 semart_dataset=semart_dataset,
                 base_path=config.get("base_path", "data")
             )
-
-        return stream_ready_dataset, val_streaming_dataset
-
-    else:
-        print("Converting to conversation format...")
-
-        if semart_dataset is not None:
-            converted_dataset = [
-                data_utils.convert_to_conversation(sample, semart_dataset=semart_dataset)
-                for sample in train_dataset
-            ]
         else:
-            converted_dataset = [
-                data_utils.convert_to_conversation(sample)
-                for sample in train_dataset
-            ]
+            print("Using regular validation dataset...")
+            # For regular validation, we keep the original format
+            prepared_val_dataset = val_dataset
 
-        return converted_dataset, val_dataset
+    return prepared_train_dataset, prepared_val_dataset
 
 
-def run_training(model, tokenizer, prepared_data, config, wandb_run, len_train_dataset, use_streaming):
-    """Run the actual training"""
+def run_training(model, tokenizer, prepared_data, config, wandb_run, len_train_dataset):
+    """Run the actual training with hybrid streaming support"""
     print("\n=== STARTING TRAINING ===")
 
-    if use_streaming:
-        stream_ready_dataset, val_streaming_dataset = prepared_data
+    use_train_streaming = config.get("use_streaming", False)
+    use_val_streaming = config.get("use_val_streaming", use_train_streaming)
+
+    prepared_train_dataset, prepared_val_dataset = prepared_data
+
+    print(f"Training mode: {'streaming' if use_train_streaming else 'regular'}")
+    print(f"Validation mode: {'streaming' if use_val_streaming else 'regular'}")
+
+    if use_train_streaming:
+        # Use streaming training function
         trainer = train_streaming(
             model=model,
             tokenizer=tokenizer,
-            streaming_dataset=stream_ready_dataset,
+            streaming_dataset=prepared_train_dataset,
             config=config,
             wandb_run=wandb_run,
             len_train_dataset=len_train_dataset,
-            val_dataset=val_streaming_dataset
+            val_dataset=prepared_val_dataset
         )
     else:
-        converted_dataset, val_dataset = prepared_data
+        # Use regular training function
         trainer = train_regular(
             model=model,
             tokenizer=tokenizer,
-            converted_dataset=converted_dataset,
+            converted_dataset=prepared_train_dataset,
             config=config,
             wandb_run=wandb_run,
-            val_dataset=val_dataset
+            val_dataset=prepared_val_dataset
         )
 
     return trainer
@@ -656,7 +670,8 @@ def main():
         # Print basic config info
         print(f"Model: {config.get('model_name', 'Unknown')}")
         print(f"Dataset: {config.get('dataset', 'Unknown')}")
-        print(f"Streaming: {config.get('use_streaming', False)}")
+        print(f"Training streaming: {config.get('use_streaming', False)}")
+        print(f"Validation streaming: {config.get('use_val_streaming', config.get('use_streaming', False))}")
         print(f"Text normalization: {config.get('use_text_normalization', True)}")
         print(f"Debug exact match: {config.get('debug_exact_match', False)}")
 
@@ -669,19 +684,19 @@ def main():
         model, tokenizer = model_utils.get_model_from_config(config)
 
         # Prepare datasets
-        use_streaming = config.get("use_streaming", False)
         train_dataset, val_dataset, test_dataset, len_train_dataset, len_test_dataset, semart_dataset = prepare_datasets(
-            config, use_streaming)
+            config)
 
         # Select test sample and run pre-training inference
-        test_sample = select_test_sample(test_dataset, use_streaming)
+        # For test sample selection, we check if test dataset is streaming based on train streaming setting
+        test_sample = select_test_sample(test_dataset, config.get("use_streaming", False))
         pre_training_output = run_pre_training_inference(model, tokenizer, test_sample, config, semart_dataset)
 
         # Prepare training data
-        prepared_data = prepare_training_data(train_dataset, val_dataset, config, semart_dataset, use_streaming)
+        prepared_data = prepare_training_data(train_dataset, val_dataset, config, semart_dataset)
 
         # Train
-        trainer = run_training(model, tokenizer, prepared_data, config, wandb_run, len_train_dataset, use_streaming)
+        trainer = run_training(model, tokenizer, prepared_data, config, wandb_run, len_train_dataset)
 
         print("✅ Training completed successfully!")
 
