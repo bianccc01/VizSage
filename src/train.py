@@ -131,6 +131,12 @@ def train_streaming(
 
             # System settings
             seed=enhanced_config.get("seed", 3407),
+
+            # Logging settings
+            logging_dir=os.path.join(output_dir, "logs"),
+            logging_first_step=True,
+            logging_nan_inf_filter=True,
+            log_level="info",
         ),
     )
 
