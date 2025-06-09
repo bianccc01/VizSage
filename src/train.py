@@ -124,8 +124,8 @@ def train_streaming(
             # Evaluation settings
             eval_strategy="steps" if val_dataset else "no",
             eval_steps=enhanced_config.get("eval_steps", enhanced_config["eval_steps"]) if val_dataset else None,
-            metric_for_best_model="eval_loss" if val_dataset else None,
-            greater_is_better=False if val_dataset else None,
+            metric_for_best_model="eval_exact_match" if val_dataset else None,
+            greater_is_better=True if val_dataset else None,
             load_best_model_at_end=True if val_dataset else False,
 
             # System settings
